@@ -1,0 +1,4 @@
+customtkinter
+pyinstaller
+configparser
+Pillow
