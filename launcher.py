@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import subprocess
 import configparser
@@ -324,19 +325,27 @@ class EldenRingLauncher(ctk.CTk):
         # 1. Standardize folder name to "Game" (case-insensitive check)
         folder_name = os.path.basename(path)
         if folder_name.lower() != "game":
-            parent_dir = os.path.dirname(path)
-            new_path = os.path.join(parent_dir, "Game")
+            new_path = os.path.join(path, "Game")
+            print(f"Standardizing: Creating nested 'Game' folder at {new_path}")
             
             try:
-                # If "Game" already exists, we might have a conflict. 
-                if os.path.exists(new_path) and path.lower() != new_path.lower():
-                    # If it already exists, we can't rename simply.
-                    self.show_rename_error(path, new_path, self._t("rename_conflict"))
-                    return
+                # Create the Game subfolder if it doesn't exist
+                if not os.path.exists(new_path):
+                    os.makedirs(new_path)
                 
-                os.rename(path, new_path)
+                # Move all items from 'path' into 'new_path', except 'Game' itself
+                for item in os.listdir(path):
+                    item_path = os.path.join(path, item)
+                    if item.lower() == "game":
+                        continue
+                        
+                    try:
+                        shutil.move(item_path, new_path)
+                    except Exception as move_err:
+                        print(f"Warning: Could not move {item}: {move_err}")
+                
                 path = new_path
-                print(f"Standardized folder name to 'Game': {path}")
+                print(f"Standardized: Content moved to {path}")
             except Exception as e:
                 self.show_rename_error(path, new_path, str(e))
                 return
