@@ -9,6 +9,7 @@ import threading
 import urllib.request
 import zipfile
 import io
+import ctypes
 from PIL import Image, ImageFilter, ImageEnhance, ImageDraw
 from translations import TRANSLATIONS, LANGUAGES_LIST
 
@@ -20,6 +21,31 @@ def resource_path(relative_path):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
+
+def is_admin():
+    """Detect if the script is running with administrative privileges."""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def run_as_admin():
+    """Relaunch the script or executable with administrative privileges."""
+    if getattr(sys, 'frozen', False):
+        # Bundled as EXE
+        executable = sys.executable
+        params = ' '.join([f'"{arg}"' for arg in sys.argv[1:]])
+    else:
+        # Running as a Python script
+        executable = sys.executable
+        params = f'"{os.path.abspath(sys.argv[0])}" ' + ' '.join([f'"{arg}"' for arg in sys.argv[1:]])
+    
+    try:
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
+        sys.exit(0)
+    except Exception as e:
+        print(f"Elevation failed: {e}")
+        return False
 
 class EldenRingLauncher(ctk.CTk):
     def __init__(self):
@@ -83,6 +109,9 @@ class EldenRingLauncher(ctk.CTk):
 
         # UI Setup (Base)
         self.setup_ui()
+        
+        # Check for administrative privileges if game is in Program Files
+        self.after(1000, self.check_admin_status)
 
     def center_window(self, width, height):
         self.update_idletasks()
@@ -126,6 +155,81 @@ class EldenRingLauncher(ctk.CTk):
         self.settings_path = os.path.join(game_dir, "ersc_settings.ini")
         self.launch_exe = os.path.join(game_dir, "EldenRing_Launcher.exe")
         self.real_exe = os.path.join(game_dir, "eldenring.exe")
+
+    def get_steam_id64(self):
+        """Retrieve SteamID64 from Windows registry and return save folder path."""
+        try:
+            import winreg
+            # Open Steam's ActiveProcess key
+            hkey = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam\ActiveProcess")
+            active_user, _ = winreg.QueryValueEx(hkey, "ActiveUser")
+            winreg.CloseKey(hkey)
+            
+            # Convert to SteamID64 (add base offset)
+            steam_id64 = str(active_user + 76561197960265728)
+            
+            # Build save folder path
+            appdata = os.getenv('APPDATA')
+            save_folder = os.path.join(appdata, "EldenRing", steam_id64)
+            
+            return save_folder if os.path.exists(save_folder) else None
+        except Exception as e:
+            print(f"Error retrieving SteamID64: {e}")
+            return None
+
+    def open_saves_folder(self):
+        """Open the Elden Ring saves folder in Windows Explorer."""
+        save_folder = self.get_steam_id64()
+        if not save_folder:
+            self.update_status(self._t("save_folder_not_found"), "#ff4444")
+            return
+        
+        if os.path.exists(save_folder):
+            # Open folder in Windows Explorer
+            subprocess.Popen(f'explorer "{save_folder}"')
+            self.update_status(self._t("save_folder_opened"), "#44ff44")
+        else:
+            self.update_status(self._t("save_folder_not_found"), "#ff4444")
+
+    def check_admin_status(self):
+        """Check if the launcher needs administrator privileges based on game path."""
+        if is_admin():
+            # Already running as admin, maybe show a small indicator or just do nothing
+            self.update_status(self._t("elevated_privileges"), "#d4af37")
+            return
+
+        # Check if game path is in a protected system directory
+        if self.game_dir:
+            protected_folders = [
+                os.environ.get("ProgramFiles", "C:\\Program Files"),
+                os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+                os.environ.get("SystemRoot", "C:\\Windows")
+            ]
+            
+            needs_elevation = False
+            for protected in protected_folders:
+                if self.game_dir.lower().startswith(protected.lower()):
+                    needs_elevation = True
+                    break
+            
+            if needs_elevation:
+                self.show_admin_elevation_ui()
+
+    def show_admin_elevation_ui(self):
+        """Show a button to restart the launcher with administrative privileges."""
+        if hasattr(self, 'tools_frame') and self.tools_frame:
+            # Add a more prominent button if elevation is required
+            self.admin_btn = ctk.CTkButton(self.overlay, 
+                                           text=f"🛡️ {self._t('restart_as_admin')}",
+                                           command=run_as_admin,
+                                           height=30, width=250,
+                                           font=("Arial", 11, "bold"),
+                                           fg_color="#8b1a1a", hover_color="#a82222",
+                                           border_width=1, border_color="#d4af37")
+            # Insert above the status label
+            self.admin_btn.pack(pady=10, after=self.status_label if hasattr(self, 'status_label') else None)
+            self.update_status(self._t("admin_required"), "#ff4444")
+
 
     def _t(self, key):
         lang = self.lang_var.get()
@@ -199,8 +303,19 @@ class EldenRingLauncher(ctk.CTk):
         threading.Thread(target=self.run_discovery, daemon=True).start()
 
     def run_discovery(self):
-        # 1. Check Registry (Steam)
+        # 0. Check Local Folder (Contextual Discovery)
         self.update_setup_status(self._t("searching"))
+        
+        # Check launcher_base itself
+        if os.path.exists(os.path.join(self.launcher_base, "eldenring.exe")):
+            self.after(0, lambda: self.handle_single_path_found(self.launcher_base))
+            
+        # Check launcher_base/Game
+        local_game_path = os.path.join(self.launcher_base, "Game")
+        if os.path.exists(os.path.join(local_game_path, "eldenring.exe")):
+            self.after(0, lambda: self.handle_single_path_found(local_game_path))
+
+        # 1. Check Registry (Steam)
         try:
             import winreg
             steam_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 1245620")
@@ -333,10 +448,12 @@ class EldenRingLauncher(ctk.CTk):
                 if not os.path.exists(new_path):
                     os.makedirs(new_path)
                 
-                # Move all items from 'path' into 'new_path', except 'Game' itself
+                # Move all items from 'path' into 'new_path', except 'Game' itself and the launcher
+                current_exe = os.path.basename(sys.executable) if getattr(sys, 'frozen', False) else os.path.basename(sys.argv[0])
+                
                 for item in os.listdir(path):
                     item_path = os.path.join(path, item)
-                    if item.lower() == "game":
+                    if item.lower() == "game" or item == current_exe:
                         continue
                         
                     try:
@@ -605,6 +722,14 @@ class EldenRingLauncher(ctk.CTk):
                                                    unselected_hover_color="#333333",
                                                    text_color="white")
         self.mod_selector.pack(padx=20)
+
+        # Open Saves Folder Button
+        ctk.CTkButton(self.overlay, text=self._t("open_saves_folder"),
+                      command=self.open_saves_folder,
+                      height=30, width=200,
+                      font=("Arial", 11),
+                      fg_color="#1a1a1a", hover_color="#2a2a2a",
+                      border_width=1, border_color="#d4af37").pack(pady=5)
 
         # Buttons
         self.button_frame = ctk.CTkFrame(self.overlay, fg_color="transparent")
