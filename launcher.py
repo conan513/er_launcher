@@ -192,6 +192,22 @@ class EldenRingLauncher(ctk.CTk):
         else:
             self.update_status(self._t("save_folder_not_found"), "#ff4444")
 
+    def is_path_protected(self, path):
+        """Check if the given path is in a protected system directory."""
+        if not path:
+            return False
+            
+        protected_folders = [
+            os.environ.get("ProgramFiles", "C:\\Program Files"),
+            os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+            os.environ.get("SystemRoot", "C:\\Windows")
+        ]
+        
+        for protected in protected_folders:
+            if path.lower().startswith(protected.lower()):
+                return True
+        return False
+
     def check_admin_status(self):
         """Check if the launcher needs administrator privileges based on game path."""
         if is_admin():
@@ -200,25 +216,15 @@ class EldenRingLauncher(ctk.CTk):
             return
 
         # Check if game path is in a protected system directory
-        if self.game_dir:
-            protected_folders = [
-                os.environ.get("ProgramFiles", "C:\\Program Files"),
-                os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
-                os.environ.get("SystemRoot", "C:\\Windows")
-            ]
-            
-            needs_elevation = False
-            for protected in protected_folders:
-                if self.game_dir.lower().startswith(protected.lower()):
-                    needs_elevation = True
-                    break
-            
-            if needs_elevation:
-                self.show_admin_elevation_ui()
+        if self.game_dir and self.is_path_protected(self.game_dir):
+            self.show_admin_elevation_ui()
 
     def show_admin_elevation_ui(self):
         """Show a button to restart the launcher with administrative privileges."""
-        if hasattr(self, 'tools_frame') and self.tools_frame:
+        if hasattr(self, 'admin_btn') and self.admin_btn.winfo_exists():
+            return # Already showing
+
+        if hasattr(self, 'overlay') and self.overlay.winfo_exists():
             # Add a more prominent button if elevation is required
             self.admin_btn = ctk.CTkButton(self.overlay, 
                                            text=f"🛡️ {self._t('restart_as_admin')}",
@@ -227,9 +233,23 @@ class EldenRingLauncher(ctk.CTk):
                                            font=("Arial", 11, "bold"),
                                            fg_color="#8b1a1a", hover_color="#a82222",
                                            border_width=1, border_color="#d4af37")
-            # Insert above the status label
-            self.admin_btn.pack(pady=10, after=self.status_label if hasattr(self, 'status_label') else None)
+            
+            # Ensure setup_status/status_label can wrap the long admin text
+            if hasattr(self, 'setup_status') and self.setup_status.winfo_exists():
+                self.setup_status.configure(wraplength=480)
+            if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                self.status_label.configure(wraplength=480)
+
+            # Insert above the status label if possible, or just pack
+            if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                self.admin_btn.pack(pady=10, after=self.status_label)
+            elif hasattr(self, 'setup_status') and self.setup_status.winfo_exists():
+                self.admin_btn.pack(pady=10, after=self.setup_status)
+            else:
+                self.admin_btn.pack(pady=10)
+                
             self.update_status(self._t("admin_required"), "#ff4444")
+            self.update_setup_status(self._t("admin_required"))
 
 
     def _t(self, key):
@@ -304,7 +324,7 @@ class EldenRingLauncher(ctk.CTk):
         ctk.CTkButton(self.overlay, text=self._t("browse_manual"), command=self.manual_browse,
                        fg_color="#1a1a1a", hover_color="#2a2a2a", border_width=1, border_color="#d4af37").pack(pady=5)
         
-        self.setup_status = ctk.CTkLabel(self.overlay, text="", font=("Arial", 11), text_color="gray")
+        self.setup_status = ctk.CTkLabel(self.overlay, text="", font=("Arial", 11), text_color="gray", wraplength=480)
         self.setup_status.pack(pady=10)
 
     def start_auto_discovery(self):
@@ -397,7 +417,7 @@ class EldenRingLauncher(ctk.CTk):
         self.scroll_frame = ctk.CTkScrollableFrame(self.overlay, fg_color="transparent", border_width=1, border_color="#333333")
         self.scroll_frame.pack(pady=10, padx=20, fill="both", expand=True)
         
-        self.setup_status = ctk.CTkLabel(self.overlay, text=self._t("searching_more"), font=("Arial", 11), text_color="gray")
+        self.setup_status = ctk.CTkLabel(self.overlay, text=self._t("searching_more"), font=("Arial", 11), text_color="gray", wraplength=480)
         self.setup_status.pack(pady=5)
         
         ctk.CTkButton(self.overlay, text=self._t("back_retry_btn"), command=self.setup_ui).pack(pady=5)
@@ -446,8 +466,39 @@ class EldenRingLauncher(ctk.CTk):
             else:
                 self.setup_status.configure(text=self._t("invalid_folder"), text_color="#ff4444")
 
+    def show_admin_required_view(self, path):
+        # Clear overlay
+        for widget in self.overlay.winfo_children():
+            widget.destroy()
+            
+        ctk.CTkLabel(self.overlay, text=f"🛡️ {self._t('admin_required')}", 
+                     font=("Cinzel", 18, "bold"), text_color="#ff4444", wraplength=480).pack(pady=(30, 20))
+        
+        path_box = ctk.CTkTextbox(self.overlay, width=500, height=60, fg_color="#1a1a1a", text_color="#aaaaaa", font=("Consolas", 11))
+        path_box.pack(pady=10, padx=20)
+        path_box.insert("0.0", f"Target: {path}")
+        path_box.configure(state="disabled")
+
+        ctk.CTkLabel(self.overlay, text=self._t("tip_4"), 
+                      font=("Arial", 13), text_color="#aaaaaa", wraplength=500).pack(pady=10)
+        
+        btn_frame = ctk.CTkFrame(self.overlay, fg_color="transparent")
+        btn_frame.pack(pady=30)
+        
+        ctk.CTkButton(btn_frame, text=f"🛡️ {self._t('restart_as_admin')}", command=run_as_admin,
+                       fg_color="#8b1a1a", hover_color="#a82222", width=220, height=40, font=("Arial", 12, "bold"),
+                       border_width=1, border_color="#d4af37").pack(side="left", padx=10)
+                       
+        ctk.CTkButton(btn_frame, text=self._t("back_btn"), command=self.show_setup_view,
+                       fg_color="#333333", hover_color="#444444", width=150, height=40).pack(side="left", padx=10)
+
     def complete_setup(self, path):
-        # 1. Standardize folder name to "Game" (case-insensitive check)
+        # 1. Proactive Admin Check - Blocked view for protected paths
+        if not is_admin() and self.is_path_protected(path):
+            self.show_admin_required_view(path)
+            return
+
+        # 2. Standardize folder name to "Game" (case-insensitive check)
         folder_name = os.path.basename(path)
         if folder_name.lower() != "game":
             new_path = os.path.join(path, "Game")
@@ -519,6 +570,17 @@ class EldenRingLauncher(ctk.CTk):
                        
         ctk.CTkButton(btn_frame, text=self._t("back_to_selection"), command=self.show_setup_view,
                        fg_color="#333333", hover_color="#444444", width=150).pack(side="left", padx=10)
+
+        # Add Admin Elevation button directly to error screen
+        if not is_admin():
+            self.error_admin_btn = ctk.CTkButton(self.overlay, 
+                                                 text=f"🛡️ {self._t('restart_as_admin')}",
+                                                 command=run_as_admin,
+                                                 height=35, width=280,
+                                                 font=("Arial", 12, "bold"),
+                                                 fg_color="#8b1a1a", hover_color="#a82222",
+                                                 border_width=1, border_color="#d4af37")
+            self.error_admin_btn.pack(pady=10)
 
     def show_bootstrap_ui(self, path):
         # Clear overlay for bootstrap
@@ -661,11 +723,27 @@ class EldenRingLauncher(ctk.CTk):
         self.after(0, lambda: self.bootstrap_label.configure(text=text))
 
     def add_retry_button(self, path):
-        ctk.CTkButton(self.overlay, text=self._t("retry_dl_btn"), command=lambda: self.show_bootstrap_ui(path),
-                       fg_color="#3e4a3d", hover_color="#4e5b4d").pack(pady=10)
-        ctk.CTkButton(self.overlay, text=self._t("show_debug_btn"), command=self.show_debug_log,
-                       fg_color="#444444", hover_color="#555555").pack(pady=5)
-        ctk.CTkButton(self.overlay, text=self._t("back_btn"), command=self.setup_ui).pack(pady=5)
+        btn_frame = ctk.CTkFrame(self.overlay, fg_color="transparent")
+        btn_frame.pack(pady=10)
+
+        ctk.CTkButton(btn_frame, text=self._t("retry_dl_btn"), command=lambda: self.show_bootstrap_ui(path),
+                       fg_color="#3e4a3d", hover_color="#4e5b4d", width=140).pack(side="left", padx=5)
+                       
+        ctk.CTkButton(btn_frame, text=self._t("show_debug_btn"), command=self.show_debug_log,
+                       fg_color="#444444", hover_color="#555555", width=140).pack(side="left", padx=5)
+                       
+        ctk.CTkButton(self.overlay, text=self._t("back_btn"), command=self.setup_ui, width=290).pack(pady=5)
+
+        # Add Admin Elevation button if it failed and we're not admin
+        if not is_admin():
+            self.bootstrap_admin_btn = ctk.CTkButton(self.overlay, 
+                                                     text=f"🛡️ {self._t('restart_as_admin')}",
+                                                     command=run_as_admin,
+                                                     height=35, width=290,
+                                                     font=("Arial", 12, "bold"),
+                                                     fg_color="#8b1a1a", hover_color="#a82222",
+                                                     border_width=1, border_color="#d4af37")
+            self.bootstrap_admin_btn.pack(pady=10)
 
     def show_debug_log(self):
         log_win = ctk.CTkToplevel(self)
@@ -766,6 +844,25 @@ class EldenRingLauncher(ctk.CTk):
                                         font=("Arial", 9), text_color="#aaaaaa")
         self.online_desc.pack(pady=(5, 0))
 
+        # Save Converter Section (Moved here for better visibility)
+        self.conv_frame = ctk.CTkFrame(self.tab_play, fg_color="transparent")
+        self.conv_frame.pack(pady=(20, 0), padx=30, fill="x")
+
+        self.conv_var = ctk.StringVar(value=self.read_config_value("auto_save_converter", "0"))
+        self.conv_checkbox = ctk.CTkCheckBox(self.conv_frame, text=self._t("save_converter_label"),
+                                              variable=self.conv_var,
+                                              onvalue="1", offvalue="0",
+                                              command=lambda: self.save_config_value("auto_save_converter", self.conv_var.get()),
+                                              font=("Arial", 12, "bold"), text_color="#d4af37",
+                                              fg_color="#3e4a3d", hover_color="#4e5b4d")
+        self.conv_checkbox.pack(pady=(0, 2))
+
+        self.conv_desc = ctk.CTkLabel(self.conv_frame, text=self._t("save_converter_desc"),
+                                      font=("Arial", 9), text_color="#888888", justify="center", wraplength=450)
+        self.conv_desc.pack(pady=(0, 5))
+
+        self.update_save_converter_state()
+
         # --- SETTINGS TAB ---
         # Password Section
         self.pass_frame = ctk.CTkFrame(self.tab_settings, fg_color="transparent")
@@ -783,6 +880,8 @@ class EldenRingLauncher(ctk.CTk):
 
         self.pass_note = ctk.CTkLabel(self.tab_settings, text=self._t("pass_note"), 
                                       font=("Arial", 10), text_color="#888888")
+        self.pass_note.pack(pady=(0, 20))
+
         self.pass_note.pack(pady=(0, 20))
 
         # Language Selector
@@ -810,7 +909,7 @@ class EldenRingLauncher(ctk.CTk):
                        text_color="#aaaaaa").pack(pady=10)
 
         # Status Label (Stay at the bottom of overlay, outside tabs)
-        self.status_label = ctk.CTkLabel(self.overlay, text="", text_color="gray", font=("Arial", 11))
+        self.status_label = ctk.CTkLabel(self.overlay, text="", text_color="gray", font=("Arial", 11), wraplength=480)
         self.status_label.pack(side="bottom", pady=5)
 
         # Start background monitor
@@ -956,6 +1055,7 @@ class EldenRingLauncher(ctk.CTk):
         
         self.save_config_value("modpack", internal_key)
         self.update_status(f"{self._t('mod_label')} {value}")
+        self.update_save_converter_state()
         if self.game_dir and not self.is_game_running():
             self.apply_modpack(internal_key)
 
@@ -1050,8 +1150,72 @@ class EldenRingLauncher(ctk.CTk):
                 config.read(self.config_path)
                 if 'Main' in config:
                     return config['Main'].get(key, fallback)
-        except: pass
-        return fallback
+            return fallback
+        except:
+            return fallback
+
+    def update_save_converter_state(self):
+        """Disable save converter if Vanilla modpack is selected, otherwise restore state."""
+        current_mod = self.modpack_var.get()
+        # Handle translated vanilla value
+        is_vanilla = (current_mod == self._t("vanilla") or current_mod == "Vanilla")
+        
+        if is_vanilla:
+            self.conv_var.set("0")
+            # We don't save to config here anymore to persist the user's preference
+            self.conv_checkbox.configure(state="disabled", text_color="#555555")
+        else:
+            saved_val = self.read_config_value("auto_save_converter", "0")
+            self.conv_var.set(saved_val)
+            self.conv_checkbox.configure(state="normal", text_color="#d4af37")
+
+    def handle_save_conversion(self, mode):
+        """Rename save files between .mod and .mod.co2 based on mode."""
+        # Safety check: never convert in Vanilla mode
+        current_mod = self.modpack_var.get()
+        if current_mod == self._t("vanilla") or current_mod == "Vanilla":
+            return True
+
+        if self.read_config_value("auto_save_converter", "0") != "1":
+            return True
+
+        save_folder = self.get_steam_id64()
+        if not save_folder or not os.path.exists(save_folder):
+            self.update_status(self._t("save_folder_not_found"), "#ff4444")
+            return False
+
+        self.update_status(self._t("converting_saves"), "#d4af37")
+        
+        try:
+            files = os.listdir(save_folder)
+            count = 0
+            if mode == "seamless":
+                # Rename .mod -> .mod.co2
+                for f in files:
+                    if f.endswith(".mod"):
+                        old_path = os.path.join(save_folder, f)
+                        new_path = old_path + ".co2"
+                        if os.path.exists(new_path):
+                            os.remove(new_path)
+                        os.rename(old_path, new_path)
+                        count += 1
+            elif mode == "online":
+                # Rename .mod.co2 -> .mod
+                for f in files:
+                    if f.endswith(".mod.co2"):
+                        old_path = os.path.join(save_folder, f)
+                        new_path = old_path[:-4] # Remove .co2
+                        if os.path.exists(new_path):
+                            os.remove(new_path)
+                        os.rename(old_path, new_path)
+                        count += 1
+            
+            if count > 0:
+                print(f"Converted {count} save files for {mode} mode.")
+            return True
+        except Exception as e:
+            self.update_status(f"Save conversion error: {e}", "#ff4444")
+            return False
 
     def launch_seamless(self):
         if self.is_game_running():
@@ -1061,6 +1225,7 @@ class EldenRingLauncher(ctk.CTk):
         # Ensure modpack is applied before launch
         self.apply_modpack(self.modpack_var.get())
         if not self.save_password(): return
+        if not self.handle_save_conversion("seamless"): return
         if not self.toggle_dlls("seamless"): return
         if os.path.exists(self.launch_exe):
             self.update_status(self._t("launch_seamless"), "#d4af37")
@@ -1075,6 +1240,7 @@ class EldenRingLauncher(ctk.CTk):
             
         # Ensure modpack is applied before launch (though Online usually needs Vanilla)
         self.apply_modpack(self.modpack_var.get())
+        if not self.handle_save_conversion("online"): return
         if not self.toggle_dlls("online"): return
         if os.path.exists(self.launch_exe):
             self.update_status(self._t("launch_online"), "#d4af37")

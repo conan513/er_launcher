@@ -71,6 +71,9 @@ TRANSLATIONS = {
         "tab_play": "Speel",
         "tab_settings": "Instellings",
         "tab_tools": "Gereedskap",
+        "save_converter_label": "Outo-stoor-omskakelaar (.mod <-> .mod.co2)",
+        "save_converter_desc": "Hernoem stoorlêers gebaseer op speletjie-modus (.mod vir Aanlyn, .mod.co2 vir Seamless).",
+        "converting_saves": "Dateer stoorlêeruitbreidings op...",
 },
     "ar": {
         "admin_required": "امتيازات المسؤول مطلوبة.",
@@ -143,6 +146,9 @@ TRANSLATIONS = {
         "tab_play": "تشغيل",
         "tab_settings": "الإعدادات",
         "tab_tools": "أدوات",
+        "save_converter_label": "محول الحفظ التلقائي (.mod <-> .mod.co2)",
+        "save_converter_desc": "إعادة تسمية الحفظ بناءً على وضع اللعبة (.mod للأونلاين، .mod.co2 للسيملس).",
+        "converting_saves": "تحديث ملحقات ملفات الحفظ...",
 },
     "bg": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -215,6 +221,9 @@ TRANSLATIONS = {
         "tab_play": "Игра",
         "tab_settings": "Настройки",
         "tab_tools": "Инструменти",
+        "save_converter_label": "Автоматичен конвертор на записите (.mod <-> .mod.co2)",
+        "save_converter_desc": "Преименува записите според режима (.mod за Онлайн, .mod.co2 за Seamless).",
+        "converting_saves": "Актуализиране на разширенията на файловете...",
 },
     "bn": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -287,6 +296,9 @@ TRANSLATIONS = {
         "tab_play": "খেলা",
         "tab_settings": "সেটিংস",
         "tab_tools": "সরঞ্জাম",
+        "save_converter_label": "অটো-সেভ কনভার্টার (.mod <-> .mod.co2)",
+        "save_converter_desc": "গেম মোডের উপর ভিত্তি করে সেভ রিনেম করে (.mod অনলাইনের জন্য, .mod.co2 সিমলেস-এর জন্য)।",
+        "converting_saves": "সেভ ফাইল এক্সটেনশন আপডেট করা হচ্ছে...",
 },
     "cs": {
         "admin_required": "Jsou vyžadována oprávnění administrátora.",
@@ -359,6 +371,9 @@ TRANSLATIONS = {
         "tab_play": "Hrát",
         "tab_settings": "Nastavení",
         "tab_tools": "Nástroje",
+        "save_converter_label": "Automatický převodník uložených her (.mod <-> .mod.co2)",
+        "save_converter_desc": "Přejmenuje uložení podle režimu hry (.mod pro Online, .mod.co2 pro Seamless).",
+        "converting_saves": "Aktualizace přípon souborů uložených her...",
 },
     "da": {
         "admin_required": "Administratorrettigheder er påkrævet.",
@@ -431,6 +446,9 @@ TRANSLATIONS = {
         "tab_play": "Spil",
         "tab_settings": "Indstillinger",
         "tab_tools": "Værktøjer",
+        "save_converter_label": "Auto-gem-konverter (.mod <-> .mod.co2)",
+        "save_converter_desc": "Omdøber gemte filer baseret på spiltilstand (.mod for Online, .mod.co2 for Seamless).",
+        "converting_saves": "Opdaterer filtyper for gemte filer...",
 },
     "de": {
         "admin_required": "Administratorrechte sind erforderlich.",
@@ -503,6 +521,9 @@ TRANSLATIONS = {
         "tab_play": "Spielen",
         "tab_settings": "Einstellungen",
         "tab_tools": "Werkzeuge",
+        "save_converter_label": "Auto-Save-Konverter (.mod <-> .mod.co2)",
+        "save_converter_desc": "Benennt Speicherstände je nach Modus um (.mod für Online, .mod.co2 für Seamless).",
+        "converting_saves": "Dateierweiterungen der Speicherstände werden aktualisiert...",
 },
     "el": {
         "admin_required": "Απαιτούνται δικαιώματα διαχειριστή.",
@@ -575,6 +596,9 @@ TRANSLATIONS = {
         "tab_play": "Παίξε",
         "tab_settings": "Ρυθμίσεις",
         "tab_tools": "Εργαλεία",
+        "save_converter_label": "Αυτόματος μετατροπέας αποθηκεύσεων (.mod <-> .mod.co2)",
+        "save_converter_desc": "Μετονομάζει τις αποθηκεύσεις βάσει της λειτουργίας (.mod για Online, .mod.co2 για Seamless).",
+        "converting_saves": "Ενημέρωση επεκτάσεων αρχείων αποθήκευσης...",
 },
     "en": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -647,6 +671,9 @@ TRANSLATIONS = {
         "tab_play": "Play",
         "tab_settings": "Settings",
         "tab_tools": "Tools",
+        "save_converter_label": "Auto-Save Converter (.mod <-> .mod.co2)",
+        "save_converter_desc": "Renames saves based on game mode (.mod for Online, .mod.co2 for Seamless).",
+        "converting_saves": "Updating save file extensions...",
 },
     "es": {
         "admin_required": "Se requieren privilegios de administrador.",
@@ -719,6 +746,9 @@ TRANSLATIONS = {
         "tab_play": "Jugar",
         "tab_settings": "Ajustes",
         "tab_tools": "Herramientas",
+        "save_converter_label": "Convertidor de guardado automático (.mod <-> .mod.co2)",
+        "save_converter_desc": "Renombra guardados según el modo (.mod para Online, .mod.co2 para Seamless).",
+        "converting_saves": "Actualizando extensiones de archivos de guardado...",
 },
     "et": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -791,6 +821,9 @@ TRANSLATIONS = {
         "tab_play": "Mängi",
         "tab_settings": "Seaded",
         "tab_tools": "Tööriistad",
+        "save_converter_label": "Automaatne salvestuste konverter (.mod <-> .mod.co2)",
+        "save_converter_desc": "Nimetab salvestused ümber vastavalt režiimile (.mod Online-i jaoks, .mod.co2 Seamless-i jaoks).",
+        "converting_saves": "Salvestusfailide laiendite uuendamine...",
 },
     "fa": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -863,6 +896,9 @@ TRANSLATIONS = {
         "tab_play": "بازی",
         "tab_settings": "تنظیمات",
         "tab_tools": "ابزار",
+        "save_converter_label": "مبدل ذخیره‌سازی خودکار (.mod <-> .mod.co2)",
+        "save_converter_desc": "تغییر نام ذخیره‌ها بر اساس حالت بازی (.mod برای آنلاین، .mod.co2 برای Seamless).",
+        "converting_saves": "در حال بروزرسانی پسوند فایل‌های ذخیره...",
 },
     "fi": {
         "admin_required": "Järjestelmänvalvojan oikeudet vaaditaan.",
@@ -935,6 +971,9 @@ TRANSLATIONS = {
         "tab_play": "Pelaa",
         "tab_settings": "Asetukset",
         "tab_tools": "Työkalut",
+        "save_converter_label": "Automaattinen tallennusten muunnin (.mod <-> .mod.co2)",
+        "save_converter_desc": "Nimeää tallennukset uudelleen pelitilan mukaan (.mod Onlinea varten, .mod.co2 Seamlessia varten).",
+        "converting_saves": "Päivitetään tallennustiedostojen päätteitä...",
 },
     "fr": {
         "admin_required": "Des privilèges d'administrateur sont requis.",
@@ -1007,6 +1046,9 @@ TRANSLATIONS = {
         "tab_play": "Jouer",
         "tab_settings": "Paramètres",
         "tab_tools": "Outils",
+        "save_converter_label": "Convertisseur de sauvegarde automatique (.mod <-> .mod.co2)",
+        "save_converter_desc": "Renomme les sauvegardes selon le mode (.mod pour l'Online, .mod.co2 pour le Seamless).",
+        "converting_saves": "Mise à jour des extensions de fichiers de sauvegarde...",
 },
     "gu": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -1079,6 +1121,9 @@ TRANSLATIONS = {
         "tab_play": "રમવું",
         "tab_settings": "સેટિંગ્સ",
         "tab_tools": "સાધનો",
+        "save_converter_label": "ઓટો-સેવ કન્વર્ટર (.mod <-> .mod.co2)",
+        "save_converter_desc": "ગેમ મોડના આધારે સેવનું નામ બદલે છે (ઓનલાઇન માટે .mod, સીમલેસ માટે .mod.co2).",
+        "converting_saves": "સેવ ફાઇલ એક્સટેન્શન અપડેટ કરી રહ્યાં છીએ...",
 },
     "he": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -1151,6 +1196,9 @@ TRANSLATIONS = {
         "tab_play": "שחק",
         "tab_settings": "הגדרות",
         "tab_tools": "כלים",
+        "save_converter_label": "ממיר שמירה אוטומטית (.mod <-> .mod.co2)",
+        "save_converter_desc": "משנה את שם השמירות בהתאם למצב המשחק (.mod לאונליין, .mod.co2 לסימלס).",
+        "converting_saves": "מעדכן סיומות קבצי שמירה...",
 },
     "hi": {
         "admin_required": "व्यवस्थापक विशेषाधिकारों की आवश्यकता है.",
@@ -1223,6 +1271,9 @@ TRANSLATIONS = {
         "tab_play": "खेलें",
         "tab_settings": "सेटिंग्स",
         "tab_tools": "उपकरण",
+        "save_converter_label": "ऑटो-सेव कन्वर्टर (.mod <-> .mod.co2)",
+        "save_converter_desc": "गेम मोड के आधार पर सेव का नाम बदलता है (ऑनलाइन के लिए .mod, सीमलेस के लिए .mod.co2)।",
+        "converting_saves": "सेव फ़ाइल एक्सटेंशन अपडेट किया जा रहा है...",
 },
     "hr": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -1295,6 +1346,9 @@ TRANSLATIONS = {
         "tab_play": "Igraj",
         "tab_settings": "Postavke",
         "tab_tools": "Alati",
+        "save_converter_label": "Automatski pretvarač spremljenih igara (.mod <-> .mod.co2)",
+        "save_converter_desc": "Preimenuje spremljene igre prema načinu rada (.mod za Online, .mod.co2 za Seamless).",
+        "converting_saves": "Ažuriranje nastavaka datoteka spremljenih igara...",
 },
     "hu": {
         "admin_required": "Rendszergazdai jogosultságok szükségesek a művelethez.",
@@ -1367,6 +1421,9 @@ TRANSLATIONS = {
         "tab_play": "Játék",
         "tab_settings": "Beállítások",
         "tab_tools": "Eszközök",
+        "save_converter_label": "Automatikus mentés konvertáló (.mod <-> .mod.co2)",
+        "save_converter_desc": "A mentések automatikus átnevezése a játékmódnak megfelelően (.mod Online-hoz, .mod.co2 Seamless-hez).",
+        "converting_saves": "Mentési fájlok kiterjesztésének frissítése...",
 },
     "id": {
         "admin_required": "Diperlukan hak akses administrator.",
@@ -1439,6 +1496,9 @@ TRANSLATIONS = {
         "tab_play": "Main",
         "tab_settings": "Pengaturan",
         "tab_tools": "Alat",
+        "save_converter_label": "Pengonversi Simpan-Otomatis (.mod <-> .mod.co2)",
+        "save_converter_desc": "Mengubah nama penyimpanan berdasarkan mode game (.mod untuk Online, .mod.co2 untuk Seamless).",
+        "converting_saves": "Memperbarui ekstensi file penyimpanan...",
 },
     "is": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -1511,6 +1571,9 @@ TRANSLATIONS = {
         "tab_play": "Spila",
         "tab_settings": "Stillingar",
         "tab_tools": "Verkfæri",
+        "save_converter_label": "Sjálfvirkur vistunar-umbreytir (.mod <-> .mod.co2)",
+        "save_converter_desc": "Endurnefnir vistanir miðað við leikham (.mod fyrir Online, .mod.co2 fyrir Seamless).",
+        "converting_saves": "Uppfæri skráarendingar vistunarskráa...",
 },
     "it": {
         "admin_required": "Sono necessari i privilegi di amministratore.",
@@ -1583,6 +1646,9 @@ TRANSLATIONS = {
         "tab_play": "Gioca",
         "tab_settings": "Impostazioni",
         "tab_tools": "Strumenti",
+        "save_converter_label": "Convertitore salvataggi automatici (.mod <-> .mod.co2)",
+        "save_converter_desc": "Rinomina i salvataggi in base alla modalità (.mod per l'Online, .mod.co2 per il Seamless).",
+        "converting_saves": "Aggiornamento delle estensioni dei file di salvataggio...",
 },
     "jp": {
         "admin_required": "管理者権限が必要です.",
@@ -1655,6 +1721,9 @@ TRANSLATIONS = {
         "tab_play": "プレイ",
         "tab_settings": "設定",
         "tab_tools": "ツール",
+        "save_converter_label": "自動セーブコンバーター (.mod <-> .mod.co2)",
+        "save_converter_desc": "ゲームモードに基づいてセーブ名を変更します (オンラインは .mod、シームレスは .mod.co2)。",
+        "converting_saves": "セーブファイルの拡張子を更新中...",
 },
     "kn": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -1727,6 +1796,9 @@ TRANSLATIONS = {
         "tab_play": "ಆಡು",
         "tab_settings": "ಸೆಟ್ಟಿಂಗ್‌ಗಳು",
         "tab_tools": "ಉಪಕರಣಗಳು",
+        "save_converter_label": "ಆಟೋ-ಸೇವ್ ಕನ್ವರ್ಟರ್ (.mod <-> .mod.co2)",
+        "save_converter_desc": "ಗೇಮ್ ಮೋಡ್ ಆಧಾರದ ಮೇಲೆ ಸೇವ್‌ಗಳನ್ನು ಮರುನಾಮಕರಣ ಮಾಡುತ್ತದೆ (ಆನ್‌ಲೈನ್‌ಗಾಗಿ .mod, ಸೀಮ್‌ಲೆಸ್‌ಗಾಗಿ .mod.co2).",
+        "converting_saves": "ಸೇವ್ ಫೈಲ್ ವಿಸ್ತರಣೆಗಳನ್ನು ನವೀಕರಿಸಲಾಗುತ್ತಿದೆ...",
 },
     "ko": {
         "admin_required": "관리자 권한이 필요합니다.",
@@ -1799,6 +1871,9 @@ TRANSLATIONS = {
         "tab_play": "플레이",
         "tab_settings": "설정",
         "tab_tools": "도구",
+        "save_converter_label": "자동 저장 변환기 (.mod <-> .mod.co2)",
+        "save_converter_desc": "게임 모드에 따라 저장 파일 이름을 변경합니다 (.mod 온라인용, .mod.co2 심리스용).",
+        "converting_saves": "저장 파일 확장자 업데이트 중...",
 },
     "lt": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -1871,6 +1946,9 @@ TRANSLATIONS = {
         "tab_play": "Žaisti",
         "tab_settings": "Nustatymai",
         "tab_tools": "Įrankiai",
+        "save_converter_label": "Automatinis išsaugojimų konverteris (.mod <-> .mod.co2)",
+        "save_converter_desc": "Pervardija išsaugojimus pagal žaidimo režimą (.mod internetiniam, .mod.co2 „Seamless“).",
+        "converting_saves": "Atnaujinami išsaugojimo failų plėtiniai...",
 },
     "lv": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -1943,6 +2021,9 @@ TRANSLATIONS = {
         "tab_play": "Spēlēt",
         "tab_settings": "Iestatījumi",
         "tab_tools": "Rīki",
+        "save_converter_label": "Automātiskais saglabāto spēļu konvertētājs (.mod <-> .mod.co2)",
+        "save_converter_desc": "Pārdēvē saglabātos failus atkarībā no režīma (.mod tiešsaistei, .mod.co2 „Seamless”).",
+        "converting_saves": "Saglabāto failu paplašinājumu atjaunināšana...",
 },
     "ml": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -2015,6 +2096,9 @@ TRANSLATIONS = {
         "tab_play": "കളിക്കുക",
         "tab_settings": "ക്രമീകരണങ്ങൾ",
         "tab_tools": "ഉപകരണങ്ങൾ",
+        "save_converter_label": "ഓട്ടോ-സേവ് കൺവെർട്ടർ (.mod <-> .mod.co2)",
+        "save_converter_desc": "ഗെയിം മോഡ് അടിസ്ഥാനമാക്കി സേവുകൾ പുനർനാമകരണം ചെയ്യുന്നു (ഓൺലൈനിനായി .mod, സീംലസിനായി .mod.co2).",
+        "converting_saves": "സേവ് ഫയൽ എക്സ്റ്റൻഷനുകൾ പുതുക്കുന്നു...",
 },
     "mr": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -2087,6 +2171,9 @@ TRANSLATIONS = {
         "tab_play": "खेळा",
         "tab_settings": "सेटिंग्स",
         "tab_tools": "साधने",
+        "save_converter_label": "ऑटो-सेव्ह कन्व्हर्टر (.mod <-> .mod.co2)",
+        "save_converter_desc": "गेम मोडवर आधारित सेव्हचे नाव बदलतो (ऑनलाईनसाठी .mod, सीमलेससाठी .mod.co2).",
+        "converting_saves": "सेव्ह फाईल एक्स्टेंशन अपडेट करत आहे...",
 },
     "ms": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -2159,6 +2246,9 @@ TRANSLATIONS = {
         "tab_play": "Main",
         "tab_settings": "Tetapan",
         "tab_tools": "Alat",
+        "save_converter_label": "Pengonversi Simpan-Automatik (.mod <-> .mod.co2)",
+        "save_converter_desc": "Menukar nama fail simpanan berdasarkan mod permainan (.mod untuk Atas Talian, .mod.co2 untuk Seamless).",
+        "converting_saves": "Mengemaskini sambungan fail simpanan...",
 },
     "nl": {
         "admin_required": "Administratorrechten zijn vereist.",
@@ -2231,6 +2321,9 @@ TRANSLATIONS = {
         "tab_play": "Spelen",
         "tab_settings": "Instellingen",
         "tab_tools": "Extra's",
+        "save_converter_label": "Automatische opslag-converter (.mod <-> .mod.co2)",
+        "save_converter_desc": "Hernoemt saves op basis van de spelmodus (.mod voor Online, .mod.co2 voor Seamless).",
+        "converting_saves": "Opslagbestandsextensies bijwerken...",
 },
     "no": {
         "admin_required": "Administratorrettigheter er påkrevd.",
@@ -2303,6 +2396,9 @@ TRANSLATIONS = {
         "tab_play": "Spill",
         "tab_settings": "Innstillinger",
         "tab_tools": "Verktøy",
+        "save_converter_label": "Automatisk lagringskonvertering (.mod <-> .mod.co2)",
+        "save_converter_desc": "Endrer navn på lagringsfiler basert på spillmodus (.mod for Online, .mod.co2 for Seamless).",
+        "converting_saves": "Oppdaterer filutvidelser for lagring...",
 },
     "pa": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -2375,6 +2471,9 @@ TRANSLATIONS = {
         "tab_play": "ਖੇਡੋ",
         "tab_settings": "ਸੈਟਿੰγਾਂ",
         "tab_tools": "ਸੰਦ",
+        "save_converter_label": "ਆਟੋ-ਸੇਵ ਕਨਵਰਟਰ (.mod <-> .mod.co2)",
+        "save_converter_desc": "ਗੇਮ ਮੋਡ ਦੇ ਆਧਾਰ 'ਤੇ ਸੇਵ ਦਾ ਨਾਮ ਬਦਲਦਾ ਹੈ (ਔਨਲਾਈਨ ਲਈ .mod, ਸੀਮਲੇਸ ਲਈ .mod.co2)।",
+        "converting_saves": "ਸੇਵ ਫਾਈਲ ਐਕਸਟੈਂਸ਼ਨਾਂ ਨੂੰ ਅਪਡੇਟ ਕੀਤਾ ਜਾ ਰਿਹਾ ਹੈ...",
 },
     "pl": {
         "admin_required": "Wymagane są uprawnienia administratora.",
@@ -2447,6 +2546,9 @@ TRANSLATIONS = {
         "tab_play": "Graj",
         "tab_settings": "Ustawienia",
         "tab_tools": "Narzędzia",
+        "save_converter_label": "Automatyczny konwerter zapisów (.mod <-> .mod.co2)",
+        "save_converter_desc": "Zmienia nazwy zapisów na podstawie trybu gry (.mod dla Online, .mod.co2 dla Seamless).",
+        "converting_saves": "Aktualizowanie rozszerzeń plików zapisu...",
 },
     "pt": {
         "admin_required": "São necessários privilégios de administrador.",
@@ -2519,6 +2621,9 @@ TRANSLATIONS = {
         "tab_play": "Jogar",
         "tab_settings": "Configurações",
         "tab_tools": "Ferramentas",
+        "save_converter_label": "Conversor de salvamentos automático (.mod <-> .mod.co2)",
+        "save_converter_desc": "Renomeia os salvamentos com base no modo de jogo (.mod para Online, .mod.co2 para Seamless).",
+        "converting_saves": "Atualizando as extensões dos arquivos de salvamento...",
 },
     "ro": {
         "admin_required": "Sunt necesare privilegii de administrator.",
@@ -2591,6 +2696,9 @@ TRANSLATIONS = {
         "tab_play": "Joacă",
         "tab_settings": "Setări",
         "tab_tools": "Instrumente",
+        "save_converter_label": "Convertor de salvări automat (.mod <-> .mod.co2)",
+        "save_converter_desc": "Redenumește salvările în funcție de modul de joc (.mod pentru Online, .mod.co2 pentru Seamless).",
+        "converting_saves": "Se actualizează extensiile fișierelor de salvare...",
 },
     "ru": {
         "admin_required": "Требуются права администратора.",
@@ -2663,6 +2771,9 @@ TRANSLATIONS = {
         "tab_play": "Играть",
         "tab_settings": "Настройки",
         "tab_tools": "Инструменты",
+        "save_converter_label": "Автоконвертер сохранений (.mod <-> .mod.co2)",
+        "save_converter_desc": "Переименовывает сохранения в зависимости от режима игры (.mod для Онлайн, .mod.co2 для Seamless).",
+        "converting_saves": "Обновление расширений файлов сохранений...",
 },
     "sk": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -2735,6 +2846,9 @@ TRANSLATIONS = {
         "tab_play": "Hrať",
         "tab_settings": "Nastavenia",
         "tab_tools": "Nástroje",
+        "save_converter_label": "Automatický konvertor uložených pozícií (.mod <-> .mod.co2)",
+        "save_converter_desc": "Premenuje uložené pozície podľa režimu hry (.mod pre Online, .mod.co2 pre Seamless).",
+        "converting_saves": "Aktualizácia prípon súborov s uloženými pozíciami...",
 },
     "sl": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -2807,6 +2921,9 @@ TRANSLATIONS = {
         "tab_play": "Igraj",
         "tab_settings": "Nastavitve",
         "tab_tools": "Orodja",
+        "save_converter_label": "Samodejni pretvornik shranjenih datotek (.mod <-> .mod.co2)",
+        "save_converter_desc": "Preimenuje shranjene datoteke glede na način igre (.mod za spletni način, .mod.co2 za Seamless).",
+        "converting_saves": "Posodabljanje končnic shranjenih datotek...",
 },
     "sr": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -2879,6 +2996,9 @@ TRANSLATIONS = {
         "tab_play": "Играј",
         "tab_settings": "Подешавања",
         "tab_tools": "Алати",
+        "save_converter_label": "Automatski konvertor sačuvanih igara (.mod <-> .mod.co2)",
+        "save_converter_desc": "Preimenuje sačuvane igre na osnovu moda igre (.mod za Online, .mod.co2 za Seamless).",
+        "converting_saves": "Ažuriranje ekstenzija sačuvanih igara...",
 },
     "sv": {
         "admin_required": "Administratörsbehörighet krävs.",
@@ -2951,6 +3071,9 @@ TRANSLATIONS = {
         "tab_play": "Spela",
         "tab_settings": "Inställningar",
         "tab_tools": "Verktyg",
+        "save_converter_label": "Automatisk sparkonverterare (.mod <-> .mod.co2)",
+        "save_converter_desc": "Byter namn på sparfiler baserat på spelläge (.mod för Online, .mod.co2 för Seamless).",
+        "converting_saves": "Uppdaterar filtillägg för sparfiler...",
 },
     "sw": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -3023,6 +3146,9 @@ TRANSLATIONS = {
         "tab_play": "Cheza",
         "tab_settings": "Mipangilio",
         "tab_tools": "Zana",
+        "save_converter_label": "Kigeuzi cha Hifadhi-Otomatiki (.mod <-> .mod.co2)",
+        "save_converter_desc": "Inabadilisha majina ya akiba kulingana na hali ya mchezo (.mod kwa Mkondoni, .mod.co2 kwa Seamless).",
+        "converting_saves": "Inasasisha viendelezi vya faili za akiba...",
 },
     "ta": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -3095,6 +3221,9 @@ TRANSLATIONS = {
         "tab_play": "விளையாடு",
         "tab_settings": "அமைப்புகள்",
         "tab_tools": "கருவிகள்",
+        "save_converter_label": "ஆட்டோ-சேவ் கன்வெர்ட்டர் (.mod <-> .mod.co2)",
+        "save_converter_desc": "விளையாட்டு பயன்முறையின் அடிப்படையில் சேமிப்புகளின் பெயரை மாற்றுகிறது (ஆன்லைனுக்கு .mod, சீம்லெஸுக்கு .mod.co2).",
+        "converting_saves": "சேமிப்பு கோப்பு நீட்டிப்புகளைப் புதுப்பிக்கிறது...",
 },
     "te": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -3167,6 +3296,9 @@ TRANSLATIONS = {
         "tab_play": "ఆడు",
         "tab_settings": "సెట్టింగ్‌లు",
         "tab_tools": "పనిముట్లు",
+        "save_converter_label": "ఆటో-సేవ్ కన్వర్టర్ (.mod <-> .mod.co2)",
+        "save_converter_desc": "గేమ్ మోడ్ ఆధారంగా సేవ్‌ల పేరు మారుస్తుంది (ఆన్‌లైన్ కోసం .mod, సీమ్‌లెస్ కోసం .mod.co2).",
+        "converting_saves": "సేవ్ ఫైల్ ఎక్స్‌టెన్షన్‌లను అప్‌డేట్ చేస్తోంది...",
 },
     "th": {
         "admin_required": "ต้องใช้สิทธิ์ผู้ดูแลระบบ.",
@@ -3239,6 +3371,9 @@ TRANSLATIONS = {
         "tab_play": "เล่น",
         "tab_settings": "การตั้งค่า",
         "tab_tools": "เครื่องมือ",
+        "save_converter_label": "ตัวแปลงเซฟอัตโนมัติ (.mod <-> .mod.co2)",
+        "save_converter_desc": "เปลี่ยนชื่อเซฟตามโหมดเกม (.mod สำหรับออนไลน์, .mod.co2 สำหรับ Seamless)",
+        "converting_saves": "กำลังอัปเดตนามสกุลไฟล์เซฟ...",
 },
     "tl": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -3311,6 +3446,9 @@ TRANSLATIONS = {
         "tab_play": "Maglaro",
         "tab_settings": "Mga Setting",
         "tab_tools": "Kasangkapan",
+        "save_converter_label": "Auto-Save Converter (.mod <-> .mod.co2)",
+        "save_converter_desc": "Pinapalitan ang pangalan ng mga save base sa mode ng laro (.mod para sa Online, .mod.co2 para sa Seamless).",
+        "converting_saves": "Inau-update ang mga extension ng save file...",
 },
     "tr": {
         "admin_required": "Yönetici ayrıcalıkları gerekiyor.",
@@ -3383,6 +3521,9 @@ TRANSLATIONS = {
         "tab_play": "Oyna",
         "tab_settings": "Ayarlar",
         "tab_tools": "Araçlar",
+        "save_converter_label": "Otomatik Kayıt Dönüştürücü (.mod <-> .mod.co2)",
+        "save_converter_desc": "Kayıtları oyun moduna göre yeniden adlandırır (Çevrimiçi için .mod, Seamless için .mod.co2).",
+        "converting_saves": "Kayıt dosyası uzantıları güncelleniyor...",
 },
     "uk": {
         "admin_required": "Потрібні права адміністратора.",
@@ -3455,6 +3596,9 @@ TRANSLATIONS = {
         "tab_play": "Грати",
         "tab_settings": "Налаштування",
         "tab_tools": "Інструменти",
+        "save_converter_label": "Автоконвертер збережень (.mod <-> .mod.co2)",
+        "save_converter_desc": "Перейменовує збереження залежно від режиму гри (.mod для Онлайн, .mod.co2 для Seamless).",
+        "converting_saves": "Оновлення розширень файлів збережень...",
 },
     "ur": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -3527,6 +3671,9 @@ TRANSLATIONS = {
         "tab_play": "کھیلیں",
         "tab_settings": "ترتیبات",
         "tab_tools": "اوزار",
+        "save_converter_label": "آٹو سیو کنورٹر (.mod <-> .mod.co2)",
+        "save_converter_desc": "گیم موڈ کی بنیاد پر سیو کا نام تبدیل کرتا ہے (آن لائن کے لیے .mod، سیملس کے لیے .mod.co2)۔",
+        "converting_saves": "سیو فائل ایکسٹینشنز کو اپ ڈیٹ کیا جا رہا ہے...",
 },
     "vi": {
         "admin_required": "Yêu cầu quyền quản trị viên.",
@@ -3599,6 +3746,9 @@ TRANSLATIONS = {
         "tab_play": "Chơi",
         "tab_settings": "Cài đặt",
         "tab_tools": "Công cụ",
+        "save_converter_label": "Trình chuyển đổi lưu tự động (.mod <-> .mod.co2)",
+        "save_converter_desc": "Đổi tên các bản lưu dựa trên chế độ chơi (.mod cho Trực tuyến, .mod.co2 cho Seamless).",
+        "converting_saves": "Đang cập nhật phần mở rộng tệp lưu...",
 },
     "zh": {
         "admin_required": "需要管理员权限.",
@@ -3671,6 +3821,9 @@ TRANSLATIONS = {
         "tab_play": "开始游戏",
         "tab_settings": "设置",
         "tab_tools": "工具",
+        "save_converter_label": "自动存档转换器 (.mod <-> .mod.co2)",
+        "save_converter_desc": "根据游戏模式重命名存档（在线模式为 .mod，无缝模式为 .mod.co2）。",
+        "converting_saves": "正在更新存档文件后缀...",
 },
 }
 
