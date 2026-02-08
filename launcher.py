@@ -91,6 +91,7 @@ class EldenRingLauncher(ctk.CTk):
         self.lang_var = ctk.StringVar(value=saved_lang)
         
         self.scroll_frame = None
+        self.current_tab_key = "tab_play"
         
         # Center the window
         self.center_window(600, 550)
@@ -237,6 +238,14 @@ class EldenRingLauncher(ctk.CTk):
         return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, TRANSLATIONS["en"].get(key, key))
 
     def on_lang_change(self, value):
+        # Save current tab key before refreshing
+        if hasattr(self, 'tabview') and self.tabview.winfo_exists():
+            current_name = self.tabview.get()
+            for key in ["tab_play", "tab_settings", "tab_tools"]:
+                if self._t(key) == current_name:
+                    self.current_tab_key = key
+                    break
+
         # Find code from display name
         lang_code = "en"
         for code, name in LANGUAGES_LIST:
@@ -271,8 +280,9 @@ class EldenRingLauncher(ctk.CTk):
         else:
             self.show_main_view()
             
-        # Language Selector outside the frames
-        self.add_language_selector(self)
+        # Language Selector outside the frames (only during setup)
+        if not self.game_dir:
+            self.add_language_selector(self)
             
         # Ensure window is visible and fades in
         self.update() # Force update to map window
@@ -680,30 +690,33 @@ class EldenRingLauncher(ctk.CTk):
         self.label = ctk.CTkLabel(self.overlay, text=self._t("app_title"), font=("Cinzel", 36, "bold"), text_color="#d4af37")
         self.label.pack(pady=(20, 2))
         self.sub_label = ctk.CTkLabel(self.overlay, text=self._t("app_subtitle"), font=("Arial", 11, "bold", "italic"), text_color="#c0c0c0")
-        self.sub_label.pack(pady=(0, 15))
+        self.sub_label.pack(pady=(0, 10))
 
-        # Password Frame
-        self.pass_frame = ctk.CTkFrame(self.overlay, fg_color="transparent")
-        self.pass_frame.pack(pady=10, padx=30, fill="x")
+        # Create Tabview
+        self.tabview = ctk.CTkTabview(self.overlay, fg_color="transparent", 
+                                        segmented_button_selected_color="#3e4a3d",
+                                        segmented_button_selected_hover_color="#4e5b4d",
+                                        segmented_button_unselected_hover_color="#333333",
+                                        text_color="white")
+        self.tabview.pack(padx=20, pady=(0, 5), fill="both", expand=True)
 
-        self.pass_label = ctk.CTkLabel(self.pass_frame, text=self._t("pass_label"), font=("Arial", 13, "bold"), text_color="#d4af37")
-        self.pass_label.pack(side="left", padx=(0, 10))
+        self.tab_play = self.tabview.add(self._t("tab_play"))
+        self.tab_settings = self.tabview.add(self._t("tab_settings"))
+        self.tab_tools = self.tabview.add(self._t("tab_tools"))
+        
+        # Restore active tab with a robust fallback
+        try:
+            target_tab_name = self._t(self.current_tab_key)
+            self.tabview.set(target_tab_name)
+        except Exception:
+            try:
+                self.tabview.set(self._t("tab_play"))
+            except:
+                pass
 
-        self.password_var = ctk.StringVar(value=self.read_password())
-        self.password_var.trace_add("write", self.on_password_change)
-        self.password_entry = ctk.CTkEntry(self.pass_frame, textvariable=self.password_var, 
-                                           width=200, height=35,
-                                           fg_color="#1a1a1a", border_color="#d4af37",
-                                           text_color="white")
-        self.password_entry.pack(side="right", expand=True, fill="x")
-
-        self.pass_note = ctk.CTkLabel(self.overlay, text=self._t("pass_note"), 
-                                      font=("Arial", 10), text_color="#888888")
-        self.pass_note.pack(pady=(0, 5))
-
-        # Modpack Selector
-        self.mod_frame = ctk.CTkFrame(self.overlay, fg_color="transparent")
-        self.mod_frame.pack(pady=5)
+        # --- PLAY TAB ---
+        self.mod_frame = ctk.CTkFrame(self.tab_play, fg_color="transparent")
+        self.mod_frame.pack(pady=10)
         
         self.mod_label = ctk.CTkLabel(self.mod_frame, text=self._t("mod_label"), font=("Arial", 12, "bold"), text_color="#d4af37")
         self.mod_label.pack(pady=(0, 5))
@@ -715,87 +728,100 @@ class EldenRingLauncher(ctk.CTk):
                                                    values=[self._t("vanilla"), self._t("qol"), self._t("diablo")],
                                                    variable=self.modpack_var,
                                                    command=self.on_modpack_change,
-                                                   fg_color="#1a1a1a",
-                                                   selected_color="#3e4a3d",
-                                                   selected_hover_color="#4e5b4d",
-                                                   unselected_color="#222222",
-                                                   unselected_hover_color="#333333",
-                                                   text_color="white")
+                                                   fg_color="#1a1a1a")
         self.mod_selector.pack(padx=20)
 
-        # Open Saves Folder Button
-        ctk.CTkButton(self.overlay, text=self._t("open_saves_folder"),
-                      command=self.open_saves_folder,
-                      height=30, width=200,
-                      font=("Arial", 11),
-                      fg_color="#1a1a1a", hover_color="#2a2a2a",
-                      border_width=1, border_color="#d4af37").pack(pady=5)
-
-        # Buttons
-        self.button_frame = ctk.CTkFrame(self.overlay, fg_color="transparent")
+        # Launch Buttons
+        self.button_frame = ctk.CTkFrame(self.tab_play, fg_color="transparent")
         self.button_frame.pack(pady=15)
 
         # Seamless Column
         self.seamless_col = ctk.CTkFrame(self.button_frame, fg_color="transparent")
-        self.seamless_col.pack(side="left", padx=15)
+        self.seamless_col.pack(side="left", padx=10)
 
         self.seamless_btn = ctk.CTkButton(self.seamless_col, text=self._t("seamless_btn"), 
                                           command=self.launch_seamless,
-                                          height=50, width=200,
-                                          font=("Arial", 15, "bold"),
+                                          height=45, width=180,
+                                          font=("Arial", 14, "bold"),
                                           fg_color="#3e4a3d", hover_color="#4e5b4d",
-                                          border_width=1, border_color="#d4af37",
-                                          cursor="hand2")
+                                          border_width=1, border_color="#d4af37")
         self.seamless_btn.pack()
         
         self.seamless_desc = ctk.CTkLabel(self.seamless_col, text=self._t("seamless_desc"), 
-                                          font=("Arial", 10), text_color="#aaaaaa")
+                                          font=("Arial", 9), text_color="#aaaaaa")
         self.seamless_desc.pack(pady=(5, 0))
 
         # Online Column
         self.online_col = ctk.CTkFrame(self.button_frame, fg_color="transparent")
-        self.online_col.pack(side="left", padx=15)
+        self.online_col.pack(side="left", padx=10)
 
         self.online_btn = ctk.CTkButton(self.online_col, text=self._t("online_btn"), 
                                         command=self.launch_online,
-                                        height=50, width=200,
-                                        font=("Arial", 15, "bold"),
-                                        fg_color="#1a1a1a", border_width=2, border_color="#d4af37",
-                                        hover_color="#2a2a2a",
-                                        cursor="hand2")
+                                        height=45, width=180,
+                                        font=("Arial", 14, "bold"),
+                                        fg_color="#1a1a1a", border_width=2, border_color="#d4af37")
         self.online_btn.pack()
 
         self.online_desc = ctk.CTkLabel(self.online_col, text=self._t("online_desc"), 
-                                        font=("Arial", 10), text_color="#aaaaaa")
+                                        font=("Arial", 9), text_color="#aaaaaa")
         self.online_desc.pack(pady=(5, 0))
 
-        self.status_label = ctk.CTkLabel(self.overlay, text="", text_color="gray", font=("Arial", 11))
-        self.status_label.pack(pady=5)
+        # --- SETTINGS TAB ---
+        # Password Section
+        self.pass_frame = ctk.CTkFrame(self.tab_settings, fg_color="transparent")
+        self.pass_frame.pack(pady=(20, 5), padx=30, fill="x")
 
-        # Troubleshooting Tools
-        self.tools_frame = ctk.CTkFrame(self.overlay, fg_color="transparent")
-        self.tools_frame.pack(side="bottom", pady=10)
-        
-        ctk.CTkButton(self.tools_frame, text=self._t("change_path"), 
+        self.pass_label = ctk.CTkLabel(self.pass_frame, text=self._t("pass_label"), font=("Arial", 13, "bold"), text_color="#d4af37")
+        self.pass_label.pack(side="left", padx=(0, 10))
+
+        self.password_var = ctk.StringVar(value=self.read_password())
+        self.password_var.trace_add("write", self.on_password_change)
+        self.password_entry = ctk.CTkEntry(self.pass_frame, textvariable=self.password_var, 
+                                           width=200, height=35,
+                                           fg_color="#1a1a1a", border_color="#d4af37")
+        self.password_entry.pack(side="right", expand=True, fill="x")
+
+        self.pass_note = ctk.CTkLabel(self.tab_settings, text=self._t("pass_note"), 
+                                      font=("Arial", 10), text_color="#888888")
+        self.pass_note.pack(pady=(0, 20))
+
+        # Language Selector
+        lang_label = ctk.CTkLabel(self.tab_settings, text=self._t("select_lang"), font=("Arial", 12, "bold"), text_color="#d4af37")
+        lang_label.pack(pady=(10, 5))
+        self.add_language_selector(self.tab_settings)
+
+        # --- TOOLS TAB ---
+        ctk.CTkButton(self.tab_tools, text=self._t("open_saves_folder"),
+                      command=self.open_saves_folder,
+                      height=35, width=250,
+                      fg_color="#1a1a1a", hover_color="#2a2a2a",
+                      border_width=1, border_color="#d4af37").pack(pady=10)
+
+        ctk.CTkButton(self.tab_tools, text=self._t("change_path"), 
                        command=self.change_game_path,
-                       height=24, width=120,
-                       font=("Arial", 10),
+                       height=35, width=250,
                        fg_color="#1a1a1a", hover_color="#333333",
-                       text_color="#888888").pack(side="left", padx=5)
+                       text_color="#aaaaaa").pack(pady=10)
                        
-        ctk.CTkButton(self.tools_frame, text=self._t("repair_files"), 
+        ctk.CTkButton(self.tab_tools, text=self._t("repair_files"), 
                        command=self.repair_modpack,
-                       height=24, width=120,
-                       font=("Arial", 10),
+                       height=35, width=250,
                        fg_color="#1a1a1a", hover_color="#3e4a3d",
-                       text_color="#888888").pack(side="left", padx=5)
+                       text_color="#aaaaaa").pack(pady=10)
+
+        # Status Label (Stay at the bottom of overlay, outside tabs)
+        self.status_label = ctk.CTkLabel(self.overlay, text="", text_color="gray", font=("Arial", 11))
+        self.status_label.pack(side="bottom", pady=5)
 
         # Start background monitor
         self.monitor_process()
 
     def add_language_selector(self, parent):
         lang_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        lang_frame.place(relx=1.0, rely=0.0, anchor="ne")
+        if parent == self.overlay:
+             lang_frame.place(relx=1.0, rely=0.0, anchor="ne")
+        else:
+             lang_frame.pack(pady=5)
         
         current_display = "English"
         for code, name in LANGUAGES_LIST:
@@ -806,8 +832,8 @@ class EldenRingLauncher(ctk.CTk):
         lang_menu = ctk.CTkComboBox(lang_frame, 
                                      values=[n for c, n in LANGUAGES_LIST],
                                      command=self.on_lang_change,
-                                     width=100, height=22,
-                                     font=("Arial", 10),
+                                     width=150, height=28,
+                                     font=("Arial", 11),
                                      fg_color="#1a1a1a", border_color="#d4af37",
                                      button_color="#d4af37", button_hover_color="#b48f17")
         lang_menu.set(current_display)
