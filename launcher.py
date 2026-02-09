@@ -10,6 +10,7 @@ import urllib.request
 import zipfile
 import io
 import ctypes
+import struct
 from PIL import Image, ImageFilter, ImageEnhance, ImageDraw
 from translations import TRANSLATIONS, LANGUAGES_LIST
 
@@ -177,6 +178,7 @@ class EldenRingLauncher(ctk.CTk):
         except Exception as e:
             print(f"Error retrieving SteamID64: {e}")
             return None
+
 
     def open_saves_folder(self):
         """Open the Elden Ring saves folder in Windows Explorer."""
@@ -793,6 +795,7 @@ class EldenRingLauncher(ctk.CTk):
                 pass
 
         # --- PLAY TAB ---
+
         self.mod_frame = ctk.CTkFrame(self.tab_play, fg_color="transparent")
         self.mod_frame.pack(pady=10)
         
@@ -1155,27 +1158,14 @@ class EldenRingLauncher(ctk.CTk):
             return fallback
 
     def update_save_converter_state(self):
-        """Disable save converter if Vanilla modpack is selected, otherwise restore state."""
+        """Restore save converter state (enabled for all modes including Vanilla)."""
         current_mod = self.modpack_var.get()
-        # Handle translated vanilla value
-        is_vanilla = (current_mod == self._t("vanilla") or current_mod == "Vanilla")
-        
-        if is_vanilla:
-            self.conv_var.set("0")
-            # We don't save to config here anymore to persist the user's preference
-            self.conv_checkbox.configure(state="disabled", text_color="#555555")
-        else:
-            saved_val = self.read_config_value("auto_save_converter", "0")
-            self.conv_var.set(saved_val)
-            self.conv_checkbox.configure(state="normal", text_color="#d4af37")
+        saved_val = self.read_config_value("auto_save_converter", "0")
+        self.conv_var.set(saved_val)
+        self.conv_checkbox.configure(state="normal", text_color="#d4af37")
 
     def handle_save_conversion(self, mode):
-        """Rename save files between .mod and .mod.co2 based on mode."""
-        # Safety check: never convert in Vanilla mode
-        current_mod = self.modpack_var.get()
-        if current_mod == self._t("vanilla") or current_mod == "Vanilla":
-            return True
-
+        """Rename save files between .mod/.sl2 and .co2 based on mode and modpack."""
         if self.read_config_value("auto_save_converter", "0") != "1":
             return True
 
@@ -1184,34 +1174,54 @@ class EldenRingLauncher(ctk.CTk):
             self.update_status(self._t("save_folder_not_found"), "#ff4444")
             return False
 
+        current_mod = self.modpack_var.get()
+        is_vanilla = (current_mod == self._t("vanilla") or current_mod == "Vanilla")
+
         self.update_status(self._t("converting_saves"), "#d4af37")
         
         try:
             files = os.listdir(save_folder)
             count = 0
             if mode == "seamless":
-                # Rename .mod -> .mod.co2
+                # Seamless targets: .co2
                 for f in files:
-                    if f.endswith(".mod"):
-                        old_path = os.path.join(save_folder, f)
-                        new_path = old_path + ".co2"
-                        if os.path.exists(new_path):
-                            os.remove(new_path)
-                        os.rename(old_path, new_path)
-                        count += 1
+                    old_path = os.path.join(save_folder, f)
+                    if is_vanilla:
+                        # Vanilla: .sl2 -> .co2 (ignore .mod.co2)
+                        if f.endswith(".sl2"):
+                            new_path = old_path[:-4] + ".co2"
+                            if os.path.exists(new_path): os.remove(new_path)
+                            os.rename(old_path, new_path)
+                            count += 1
+                    else:
+                        # Modpack: .mod -> .mod.co2
+                        if f.endswith(".mod"):
+                            new_path = old_path + ".co2"
+                            if os.path.exists(new_path): os.remove(new_path)
+                            os.rename(old_path, new_path)
+                            count += 1
             elif mode == "online":
-                # Rename .mod.co2 -> .mod
+                # Online targets: .sl2 (Vanilla) or .mod (Modpack)
                 for f in files:
-                    if f.endswith(".mod.co2"):
-                        old_path = os.path.join(save_folder, f)
-                        new_path = old_path[:-4] # Remove .co2
-                        if os.path.exists(new_path):
-                            os.remove(new_path)
-                        os.rename(old_path, new_path)
-                        count += 1
+                    old_path = os.path.join(save_folder, f)
+                    if is_vanilla:
+                        # Vanilla: .co2 -> .sl2
+                        # CRITICAL: Do NOT convert .mod.co2 in vanilla!
+                        if f.endswith(".co2") and not f.endswith(".mod.co2"):
+                            new_path = old_path[:-4] + ".sl2"
+                            if os.path.exists(new_path): os.remove(new_path)
+                            os.rename(old_path, new_path)
+                            count += 1
+                    else:
+                        # Modpack: .mod.co2 -> .mod
+                        if f.endswith(".mod.co2"):
+                            new_path = old_path[:-4] # Remove .co2
+                            if os.path.exists(new_path): os.remove(new_path)
+                            os.rename(old_path, new_path)
+                            count += 1
             
             if count > 0:
-                print(f"Converted {count} save files for {mode} mode.")
+                print(f"Converted {count} save files for {mode} mode (Modpack: {current_mod}).")
             return True
         except Exception as e:
             self.update_status(f"Save conversion error: {e}", "#ff4444")
