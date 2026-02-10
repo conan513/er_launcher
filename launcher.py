@@ -1,4 +1,6 @@
 import os
+import time
+from datetime import datetime
 import shutil
 import sys
 import subprocess
@@ -13,6 +15,9 @@ import ctypes
 import struct
 from PIL import Image, ImageFilter, ImageEnhance, ImageDraw
 from translations import TRANSLATIONS, LANGUAGES_LIST
+
+
+
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -91,6 +96,16 @@ class EldenRingLauncher(ctk.CTk):
         saved_lang = self.read_config_value("language", "en")
         self.lang_var = ctk.StringVar(value=saved_lang)
         
+        self.game_active = False
+        
+        # QoL Mod Toggles (default all enabled)
+        self.qol_questlog_var = ctk.BooleanVar(value=self.read_config_value("qol_questlog_enabled", "True") == "True")
+        self.qol_map_var = ctk.BooleanVar(value=self.read_config_value("qol_map_enabled", "True") == "True")
+        self.qol_fps_unlocker_var = ctk.BooleanVar(value=self.read_config_value("qol_fps_unlocker_enabled", "True") == "True")
+        fps_limit = int(self.read_config_value("qol_fps_limit", "300"))
+        self.qol_fps_limit_var = ctk.IntVar(value=min(300, fps_limit))
+        self.disable_sharpening_var = ctk.BooleanVar(value=self.read_config_value("disable_sharpening", "True") == "True")
+        
         self.scroll_frame = None
         self.current_tab_key = "tab_play"
         
@@ -109,8 +124,24 @@ class EldenRingLauncher(ctk.CTk):
         self.game_dir = None
         self.load_config()
 
+        # UI Scaling Setup
+        scaling_value = self.read_config_value("ui_scaling", "1.0")
+        try:
+            scale_float = float(scaling_value)
+            ctk.set_widget_scaling(scale_float)
+            ctk.set_window_scaling(scale_float)
+        except Exception as e:
+            print(f"Error applying UI scaling: {e}")
+            ctk.set_widget_scaling(1.0)
+            ctk.set_window_scaling(1.0)
+
         # UI Setup (Base)
+        self.lockdown_frame = None
         self.setup_ui()
+        self.launch_start_time = 0
+        
+        # Start background monitor
+        self.after(2000, self.monitor_process)
         
         # Check for administrative privileges if game is in Program Files
         self.after(1000, self.check_admin_status)
@@ -159,25 +190,47 @@ class EldenRingLauncher(ctk.CTk):
         self.real_exe = os.path.join(game_dir, "eldenring.exe")
 
     def get_steam_id64(self):
-        """Retrieve SteamID64 from Windows registry and return save folder path."""
+        """Retrieve SteamID64 save folder path, with fallbacks for non-standard folder names."""
+        appdata = os.getenv('APPDATA')
+        base_dir = os.path.join(appdata, "EldenRing")
+        if not os.path.exists(base_dir):
+            return None
+
+        # 1. Try Registry (Most accurate if Steam is running)
         try:
             import winreg
-            # Open Steam's ActiveProcess key
             hkey = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam\ActiveProcess")
             active_user, _ = winreg.QueryValueEx(hkey, "ActiveUser")
             winreg.CloseKey(hkey)
+            if active_user:
+                steam_id64 = str(active_user + 76561197960265728)
+                potential_path = os.path.join(base_dir, steam_id64)
+                if os.path.exists(potential_path):
+                    return potential_path
+        except:
+            pass
+
+        # 2. Fallback: Search for folders containing ER0000.sl2 or ER0000.co2
+        try:
+            items = os.listdir(base_dir)
+            potential_folders = []
+            for item in items:
+                item_path = os.path.join(base_dir, item)
+                if os.path.isdir(item_path):
+                    # Check if it contains save files
+                    if any(f.startswith("ER0000") for f in os.listdir(item_path)):
+                        # Get last modification time of ER0000.sl2 or any save file
+                        mtime = os.path.getmtime(item_path)
+                        potential_folders.append((mtime, item_path))
             
-            # Convert to SteamID64 (add base offset)
-            steam_id64 = str(active_user + 76561197960265728)
-            
-            # Build save folder path
-            appdata = os.getenv('APPDATA')
-            save_folder = os.path.join(appdata, "EldenRing", steam_id64)
-            
-            return save_folder if os.path.exists(save_folder) else None
+            if potential_folders:
+                # Pick the most recently modified folder that contains saves
+                potential_folders.sort(key=lambda x: x[0], reverse=True)
+                return potential_folders[0][1]
         except Exception as e:
-            print(f"Error retrieving SteamID64: {e}")
-            return None
+            print(f"Error searching for save folder: {e}")
+
+        return None
 
 
     def open_saves_folder(self):
@@ -281,6 +334,7 @@ class EldenRingLauncher(ctk.CTk):
 
     def setup_ui(self):
         # Clear existing widgets if any (for re-init)
+        self.lockdown_frame = None
         for widget in self.winfo_children():
             widget.destroy()
 
@@ -550,7 +604,6 @@ class EldenRingLauncher(ctk.CTk):
         err_box.configure(state="disabled")
         
         ctk.CTkLabel(self.overlay, text=self._t("common_solutions"), font=("Arial", 13, "bold"), text_color="#d4af37").pack(pady=(10, 5))
-        
         # Note: Tips are slightly complex to translate individually, keeping them for now or using generic ones if needed
         # For 50 languages, generic tips or localized ones are better. I'll use translated keys if I add them.
         tips = [
@@ -885,12 +938,31 @@ class EldenRingLauncher(ctk.CTk):
                                       font=("Arial", 10), text_color="#888888")
         self.pass_note.pack(pady=(0, 20))
 
-        self.pass_note.pack(pady=(0, 20))
-
         # Language Selector
         lang_label = ctk.CTkLabel(self.tab_settings, text=self._t("select_lang"), font=("Arial", 12, "bold"), text_color="#d4af37")
         lang_label.pack(pady=(10, 5))
         self.add_language_selector(self.tab_settings)
+
+        # UI Scaling
+        scaling_label = ctk.CTkLabel(self.tab_settings, text=self._t("ui_scaling_label"), font=("Arial", 12, "bold"), text_color="#d4af37")
+        scaling_label.pack(pady=(15, 5))
+        
+        current_scaling = self.read_config_value("ui_scaling", "1.0")
+        scaling_options = ["100%", "125%", "150%", "175%", "200%"]
+        
+        # Map float to percentage string for the menu
+        scaling_map = {"1.0": "100%", "1.25": "125%", "1.5": "150%", "1.75": "175%", "2.0": "200%"}
+        initial_val = scaling_map.get(current_scaling, "100%")
+        
+        self.scaling_menu = ctk.CTkOptionMenu(self.tab_settings,
+                                              values=scaling_options,
+                                              command=self.on_scaling_change,
+                                              width=150, height=28,
+                                              fg_color="#1a1a1a", button_color="#d4af37",
+                                              button_hover_color="#b48f17")
+        self.scaling_menu.set(initial_val)
+        self.scaling_menu.pack()
+
 
         # --- TOOLS TAB ---
         ctk.CTkButton(self.tab_tools, text=self._t("open_saves_folder"),
@@ -911,12 +983,258 @@ class EldenRingLauncher(ctk.CTk):
                        fg_color="#1a1a1a", hover_color="#3e4a3d",
                        text_color="#aaaaaa").pack(pady=10)
 
+        # --- MOD SETTINGS TAB (conditionally shown) ---
+        # Check if QoL or Diablo is selected and add tab
+        current_mod = self.read_config_value('modpack', "Vanilla")
+        if current_mod in ["Quality of Life", "Diablo Loot (RNG)"]:
+            self.create_mod_settings_tab()
+
         # Status Label (Stay at the bottom of overlay, outside tabs)
         self.status_label = ctk.CTkLabel(self.overlay, text="", text_color="gray", font=("Arial", 11), wraplength=480)
         self.status_label.pack(side="bottom", pady=5)
 
-        # Start background monitor
-        self.monitor_process()
+
+    def create_mod_settings_tab(self):
+        """Create and populate the Mod Settings tab with a two-column layout."""
+        self.tab_mod_settings = self.tabview.add(self._t("tab_mod_settings"))
+        
+        # Container frame for the grid
+        self.qol_container = ctk.CTkFrame(self.tab_mod_settings, fg_color="transparent")
+        self.qol_container.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Configure grid columns for equal width
+        self.qol_container.grid_columnconfigure(0, weight=1)
+        self.qol_container.grid_columnconfigure(1, weight=1)
+
+        # Title (spanning both columns)
+        ctk.CTkLabel(self.qol_container, text=self._t("mod_settings_title"), 
+                     font=("Arial", 14, "bold"), text_color="#d4af37").grid(row=0, column=0, columnspan=2, pady=(10, 5))
+        
+        # --- COLUMN 0 (LEFT) ---
+        col0_frame = ctk.CTkFrame(self.qol_container, fg_color="transparent")
+        col0_frame.grid(row=1, column=0, sticky="nsew", padx=(10, 5), pady=5)
+        
+        # Quest Log
+        self.qol_questlog_cb = ctk.CTkCheckBox(col0_frame, text=self._t("qol_questlog"),
+                                                variable=self.qol_questlog_var,
+                                                command=self.on_qol_toggle_change,
+                                                font=("Arial", 11, "bold"), text_color="#d4af37",
+                                                fg_color="#3e4a3d", hover_color="#4e5b4d")
+        self.qol_questlog_cb.pack(anchor="w", pady=(5, 0))
+        ctk.CTkLabel(col0_frame, text=self._t("qol_questlog_desc"),
+                     font=("Arial", 8), text_color="#888888", justify="left").pack(anchor="w", padx=(25, 0), pady=(0, 5))
+        
+        # Map for Goblins
+        self.qol_map_cb = ctk.CTkCheckBox(col0_frame, text=self._t("qol_map"),
+                                          variable=self.qol_map_var,
+                                          command=self.on_qol_toggle_change,
+                                          font=("Arial", 11, "bold"), text_color="#d4af37",
+                                          fg_color="#3e4a3d", hover_color="#4e5b4d")
+        self.qol_map_cb.pack(anchor="w", pady=(5, 0))
+        ctk.CTkLabel(col0_frame, text=self._t("qol_map_desc"),
+                     font=("Arial", 8), text_color="#888888", justify="left").pack(anchor="w", padx=(25, 0), pady=(0, 5))
+        
+        # --- COLUMN 1 (RIGHT) ---
+        col1_frame = ctk.CTkFrame(self.qol_container, fg_color="transparent")
+        col1_frame.grid(row=1, column=1, sticky="nsew", padx=(5, 10), pady=5)
+        
+        
+        # FPS Unlocker
+        self.qol_fps_unlocker_cb = ctk.CTkCheckBox(col1_frame, text=self._t("qol_fps_unlocker"),
+                                                    variable=self.qol_fps_unlocker_var,
+                                                    command=self.on_qol_fps_toggle_change,
+                                                    font=("Arial", 11, "bold"), text_color="#d4af37",
+                                                    fg_color="#3e4a3d", hover_color="#4e5b4d")
+        self.qol_fps_unlocker_cb.pack(anchor="w", pady=(5, 0))
+        ctk.CTkLabel(col1_frame, text=self._t("qol_fps_unlocker_desc"),
+                     font=("Arial", 8), text_color="#888888", justify="left").pack(anchor="w", padx=(25, 0), pady=(0, 5))
+        
+        # FPS Limit Slider (compactly shown under checkbox)
+        self.fps_limit_frame = ctk.CTkFrame(col1_frame, fg_color="transparent")
+        self.fps_limit_frame.pack(anchor="w", padx=(25, 0), pady=(0, 5), fill="x")
+        
+        self.fps_limit_label = ctk.CTkLabel(self.fps_limit_frame, text=f"{self._t('qol_fps_limit')} {self.qol_fps_limit_var.get()}",
+                                            font=("Arial", 10), text_color="#d4af37")
+        self.fps_limit_label.pack(anchor="w")
+        
+        self.fps_limit_slider = ctk.CTkSlider(self.fps_limit_frame, from_=60, to=300, number_of_steps=240,
+                                              variable=self.qol_fps_limit_var,
+                                              command=self.on_fps_limit_change,
+                                              height=16, fg_color="#1a1a1a", progress_color="#3e4a3d",
+                                              button_color="#d4af37", button_hover_color="#b48f17")
+        self.fps_limit_slider.pack(anchor="w", fill="x", padx=(0, 5))
+        
+        # Disable Sharpening
+        self.disable_sharpening_cb = ctk.CTkCheckBox(col1_frame, text=self._t("disable_sharpening"),
+                                                      variable=self.disable_sharpening_var,
+                                                      command=self.on_qol_toggle_change,
+                                                      font=("Arial", 11, "bold"), text_color="#d4af37",
+                                                      fg_color="#3e4a3d", hover_color="#4e5b4d")
+        self.disable_sharpening_cb.pack(anchor="w", pady=(10, 0))
+        ctk.CTkLabel(col1_frame, text=self._t("disable_sharpening_desc"),
+                     font=("Arial", 8), text_color="#888888", justify="left").pack(anchor="w", padx=(25, 0), pady=(0, 5))
+        
+        # Update FPS limit visibility and Map checkbox
+        self.update_fps_limit_visibility()
+        self.update_map_checkbox_state()
+
+    def update_map_checkbox_state(self):
+        """Enable/disable Map checkbox based on current modpack."""
+        current_modpack = self.read_config_value('modpack', "Vanilla")
+        
+        if current_modpack == "Diablo Loot (RNG)":
+            # Disable checkbox and force it to enabled for Diablo
+            self.qol_map_var.set(True)
+            self.qol_map_cb.configure(state="disabled")
+        else:
+            # Enable checkbox for QoL
+            self.qol_map_cb.configure(state="normal")
+
+    def on_qol_fps_toggle_change(self):
+        """Called when FPS Unlocker toggle is changed."""
+        self.on_qol_toggle_change()
+        self.update_fps_limit_visibility()
+    
+    def update_fps_limit_visibility(self):
+        """Enable/disable FPS limit slider based on FPS Unlocker toggle."""
+        if self.qol_fps_unlocker_var.get():
+            self.fps_limit_slider.configure(state="normal")
+            self.fps_limit_label.configure(text_color="#d4af37")
+        else:
+            self.fps_limit_slider.configure(state="disabled")
+            self.fps_limit_label.configure(text_color="#888888")
+    
+    def on_fps_limit_change(self, value):
+        """Called when FPS limit slider is changed."""
+        fps_value = int(value)
+        self.qol_fps_limit_var.set(fps_value)
+        
+        # Update label text
+        self.fps_limit_label.configure(text=f"{self._t('qol_fps_limit')} {fps_value}")
+        
+        # Save to launcher config
+        self.save_config_value("qol_fps_limit", str(fps_value))
+        
+        # Update FPS config.ini if game is not running
+        if self.game_dir and not self.is_game_running():
+            self.update_fps_config_ini(fps_value)
+
+
+    def on_qol_toggle_change(self):
+        """Called when any QoL toggle is changed."""
+        # Save toggle states
+        self.save_config_value("qol_questlog_enabled", str(self.qol_questlog_var.get()))
+        self.save_config_value("qol_map_enabled", str(self.qol_map_var.get()))
+        self.save_config_value("qol_fps_unlocker_enabled", str(self.qol_fps_unlocker_var.get()))
+        self.save_config_value("disable_sharpening", str(self.disable_sharpening_var.get()))
+        
+        if self.game_dir:
+            self.toggle_fps_unlocker_file()
+            self.toggle_sharpening_file()
+        
+        # Update TOML and INI configs if game is not running
+        if self.game_dir and not self.is_game_running():
+            self.update_toml_config(self.game_dir, "Quality of Life")
+            
+            # Update FPS config.ini if FPS Unlocker is enabled
+            if self.qol_fps_unlocker_var.get():
+                self.update_fps_config_ini(self.qol_fps_limit_var.get())
+
+    def toggle_fps_unlocker_file(self):
+        """Enable/disable FPS Unlocker by renaming the DLL file."""
+        if not self.game_dir:
+            return
+        
+        fps_dll_path = os.path.join(self.game_dir, "dinput8.dll")
+        fps_dll_disabled = fps_dll_path + ".disabled"
+        
+        try:
+            if self.qol_fps_unlocker_var.get():
+                # Enable: rename .dll.disabled to .dll
+                if os.path.exists(fps_dll_disabled):
+                    os.rename(fps_dll_disabled, fps_dll_path)
+                    print(f"Enabled FPS Unlocker: {fps_dll_path}")
+            else:
+                # Disable: rename .dll to .dll.disabled
+                if os.path.exists(fps_dll_path):
+                    os.rename(fps_dll_path, fps_dll_disabled)
+                    print(f"Disabled FPS Unlocker: {fps_dll_disabled}")
+        except Exception as e:
+            print(f"Error toggling FPS Unlocker file: {e}")
+    
+    def toggle_sharpening_file(self):
+        """Enable/disable sharpening by renaming the shader file."""
+        if not self.game_dir:
+            return
+        
+        # Determine current mod folder based on selected modpack
+        pack_map = {
+            "Quality of Life": "mod_qol",
+            "Diablo Loot (RNG)": "mod_rng"
+        }
+        mod_folder = pack_map.get(self.modpack_var.get())
+        
+        # Only apply to QoL and Diablo modpacks
+        if not mod_folder:
+            return
+        
+        shader_file = os.path.join(self.game_dir, mod_folder, "shader", "gxposteffect.shaderbnd.dcx")
+        shader_disabled = shader_file + ".disabled"
+        
+        # Check if neither file exists - suggest repair
+        if not os.path.exists(shader_file) and not os.path.exists(shader_disabled):
+            print(f"Warning: Shader file not found in {mod_folder}/shader/")
+            self.update_status(self._t("config_missing_warning").format(file=shader_file), "#ff4444")
+            return
+        
+        try:
+            if self.disable_sharpening_var.get():
+                # Disable sharpening: ensure file is active (not .disabled)
+                if os.path.exists(shader_disabled):
+                    os.rename(shader_disabled, shader_file)
+                    print(f"Disabled sharpening: {shader_file}")
+            else:
+                # Enable sharpening: rename file to .disabled
+                if os.path.exists(shader_file):
+                    os.rename(shader_file, shader_disabled)
+                    print(f"Enabled sharpening: {shader_disabled}")
+        except Exception as e:
+            print(f"Error toggling sharpening file: {e}")
+    
+    def update_fps_config_ini(self, fps_limit):
+        """Update the FPS config.ini file in mods/UnlockTheFps/ directory."""
+        if not self.game_dir:
+            return
+        
+        fps_config_path = os.path.join(self.game_dir, "mods", "UnlockTheFps", "config.ini")
+        
+        if not self.ensure_config_exists(fps_config_path):
+            return
+        
+        try:
+            
+            # Write config file
+            with open(fps_config_path, 'w') as f:
+                f.write("[unlockthefps]\n")
+                f.write(f"limit = {fps_limit}\n")
+            
+            print(f"Updated FPS config: {fps_limit}")
+        except Exception as e:
+            print(f"Error updating FPS config: {e}")
+
+        except Exception as e:
+            print(f"Error updating ERFPS FOV config: {e}")
+
+    def ensure_config_exists(self, file_path):
+        """Check if a config file exists. If not, warn the user and return False."""
+        if not os.path.exists(file_path):
+            filename = os.path.basename(file_path)
+            message = self._t("config_missing_warning").format(file=filename)
+            from tkinter import messagebox
+            messagebox.showwarning(self._t("warning") if TRANSLATIONS[self.lang_var.get()].get("warning") else "Warning", message)
+            print(f"Safety Check Failed: {file_path} is missing.")
+            return False
+        return True
 
     def add_language_selector(self, parent):
         lang_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -936,19 +1254,54 @@ class EldenRingLauncher(ctk.CTk):
                                      command=self.on_lang_change,
                                      width=150, height=28,
                                      font=("Arial", 11),
-                                     fg_color="#1a1a1a", border_color="#d4af37",
+                                     fg_color="#1a1a1a",
                                      button_color="#d4af37", button_hover_color="#b48f17")
         lang_menu.set(current_display)
         lang_menu.pack()
 
+    def on_scaling_change(self, choice):
+        """Handle UI scaling change."""
+        scaling_map = {"100%": "1.0", "125%": "1.25", "150%": "1.5", "175%": "1.75", "200%": "2.0"}
+        scaling_val = scaling_map.get(choice, "1.0")
+        
+        print(f"Changing UI scaling to: {choice} ({scaling_val})")
+        self.save_config_value("ui_scaling", scaling_val)
+        
+        try:
+            val = float(scaling_val)
+            ctk.set_widget_scaling(val)
+            ctk.set_window_scaling(val)
+        except Exception as e:
+            print(f"Error applying real-time scaling: {e}")
+
     def monitor_process(self):
-        if self.is_game_running():
-            self.update_status(self._t("now_running"), "#44ff44")
-        else:
-            # If it was previously "Launching..." but game isn't running yet, keep it for a bit
-            current_status = self.status_label.cget("text")
-            if "Launching" not in current_status or "found" in current_status:
-                self.update_status(self._t("ready"), "gray")
+        try:
+            is_running = self.is_game_running()
+            
+            # Update lockdown status globally
+            self.set_lockdown(is_running)
+            
+            if is_running:
+                self.update_status(self._t("now_running"), "#44ff44")
+                self.game_active = True
+                self.launch_start_time = 0 # Reset on successful launch
+            else:
+                if hasattr(self, 'game_active') and self.game_active:
+                    self.game_active = False
+
+                # Status Reset Logic:
+                # If we are in "Launching" state (launch_start_time > 0)
+                if self.launch_start_time > 0:
+                    # If it's been more than 30 seconds, give up and reset
+                    if time.time() - self.launch_start_time > 30:
+                        self.launch_start_time = 0
+                        self.update_status(self._t("ready"), "gray")
+                    # Otherwise, stay in "Launching" state (do nothing, don't reset to Ready)
+                else:
+                    # Normal state, ensure it says Ready
+                    self.update_status(self._t("ready"), "gray")
+        except Exception as e:
+            print(f"[ERROR] monitor_process exception: {e}")
         
         # Check every 2 seconds
         self.after(2000, self.monitor_process)
@@ -1044,11 +1397,28 @@ class EldenRingLauncher(ctk.CTk):
     def is_game_running(self):
         try:
             # Check for eldenring.exe in the process list
-            # We use the full path if possible to be specific, or just the name
             output = subprocess.check_output('tasklist /FI "IMAGENAME eq eldenring.exe" /NH', shell=True).decode('utf-8', errors='ignore')
             return "eldenring.exe" in output.lower()
         except:
             return False
+
+    def get_game_pid(self):
+        """Find the PID of eldenring.exe, prioritizing our own game_process."""
+        try:
+            if hasattr(self, 'game_process') and self.game_process:
+                if self.game_process.poll() is None:
+                    return self.game_process.pid
+
+            output = subprocess.check_output('tasklist /FI "IMAGENAME eq eldenring.exe" /NH /FO CSV', shell=True).decode('utf-8', errors='ignore')
+            if "eldenring.exe" in output.lower():
+                import csv
+                reader = csv.reader(io.StringIO(output))
+                for row in reader:
+                    if row and row[0].lower() == "eldenring.exe":
+                        return int(row[1])
+        except Exception as e:
+            pass
+        return None
 
     def on_modpack_change(self, value):
         # Map translated value back to internal key
@@ -1059,8 +1429,29 @@ class EldenRingLauncher(ctk.CTk):
         self.save_config_value("modpack", internal_key)
         self.update_status(f"{self._t('mod_label')} {value}")
         self.update_save_converter_state()
+        
+        # Handle Mod Settings tab visibility
+        if internal_key in ["Quality of Life", "Diablo Loot (RNG)"]:
+            # Show Mod Settings tab if not already present
+            if not hasattr(self, 'tab_mod_settings') or self.tab_mod_settings not in self.tabview._tab_dict.values():
+                self.create_mod_settings_tab()
+            else:
+                # Tab already exists, just update Map checkbox state
+                self.update_map_checkbox_state()
+        else:
+            # Hide Mod Settings tab if present
+            if hasattr(self, 'tab_mod_settings'):
+                try:
+                    self.tabview.delete(self._t("tab_mod_settings"))
+                    delattr(self, 'tab_mod_settings')
+                except:
+                    pass
+        
         if self.game_dir and not self.is_game_running():
             self.apply_modpack(internal_key)
+            
+        # Sync settings regardless of whether we applied the modpack (e.g. if game running)
+        self.sync_modpack_settings()
 
     def apply_modpack(self, pack_name):
         if not self.game_dir or not os.path.exists(self.game_dir):
@@ -1091,13 +1482,102 @@ class EldenRingLauncher(ctk.CTk):
             # Now update the TOML config
             self.update_toml_config(self.game_dir, pack_name)
             
+            # Sync UI settings with the new modpack state
+            self.sync_modpack_settings()
+            
         except Exception as e:
             print(f"Error applying modpack: {e}")
 
+    def sync_modpack_settings(self):
+        """Sync UI settings with actual file state of the selected modpack."""
+        if not self.game_dir:
+            return
+
+        # Get current selected value (translated)
+        current_val = self.modpack_var.get()
+        
+        # Determine internal key
+        internal_key = "Vanilla"
+        if current_val == self._t("qol"): internal_key = "Quality of Life"
+        elif current_val == self._t("diablo"): internal_key = "Diablo Loot (RNG)"
+        elif current_val == "Quality of Life": internal_key = "Quality of Life" # Handle internal key if set directly
+        elif current_val == "Diablo Loot (RNG)": internal_key = "Diablo Loot (RNG)"
+
+        # Determine current mod folder based on internal key
+        pack_map = {
+            "Quality of Life": "mod_qol",
+            "Diablo Loot (RNG)": "mod_rng"
+        }
+        mod_folder = pack_map.get(internal_key)
+        
+        # Only apply to QoL and Diablo modpacks
+        if not mod_folder:
+            return
+            
+        # Check Sharpening Status
+        shader_file = os.path.join(self.game_dir, mod_folder, "shader", "gxposteffect.shaderbnd.dcx")
+        shader_disabled = shader_file + ".disabled"
+        
+        # If .disabled exists, sharpening is ENABLED (checkbox unchecked)
+        # If .dcx exists, sharpening is DISABLED (checkbox checked)
+        if os.path.exists(shader_disabled):
+            self.disable_sharpening_var.set(False)
+            self.save_config_value("disable_sharpening", "False")
+        elif os.path.exists(shader_file):
+            self.disable_sharpening_var.set(True)
+            self.save_config_value("disable_sharpening", "True")
+            
+        # Sync FPS Unlocker Status (Global)
+        fps_dll = os.path.join(self.game_dir, "dinput8.dll")
+        fps_disabled = fps_dll + ".disabled"
+        
+        if os.path.exists(fps_dll):
+            self.qol_fps_unlocker_var.set(True)
+            self.save_config_value("qol_fps_unlocker_enabled", "True")
+            self.update_fps_limit_visibility()
+        elif os.path.exists(fps_disabled):
+            self.qol_fps_unlocker_var.set(False)
+            self.save_config_value("qol_fps_unlocker_enabled", "False")
+            self.update_fps_limit_visibility()
+        else:
+             # Default to unchecked (enabled) if neither exists, or maybe check warning?
+             # For sync, we just want to reflect state if possible.
+             pass
+
+    def get_mod_config(self, pack_name):
+        """Build mod config dynamically based on toggle states and pack name."""
+        # Base DLLs always enabled
+        dlls = ["ersc.dll", "Scripts-Data-Exposer-FS.dll", "waygate_client.dll"]
+        
+        # Add optional DLLs based on toggles
+        if self.qol_questlog_var.get():
+            dlls.append("erquestlog.dll")
+        # er_alt_saves.dll is now mandatory for modpacks
+        dlls.append("er_alt_saves.dll")
+        
+        # Build DLL string
+        dll_str = '["' + '", "'.join(dlls) + '"]'
+        
+        # Determine mod folder based on pack name
+        if pack_name == "Quality of Life":
+            mod_folder = "mod_qol"
+        elif pack_name == "Diablo Loot (RNG)":
+            mod_folder = "mod_rng"
+        else:
+            mod_folder = "modpack"  # fallback
+        
+        # Build mod config
+        mod_enabled = "true" if self.qol_map_var.get() else "false"
+        mods_str = f'[{{ enabled = {mod_enabled}, name = "{mod_folder}", path = "{mod_folder}" }}]'
+        
+        return {
+            "dlls": dll_str,
+            "mods": mods_str
+        }
+
     def update_toml_config(self, game_path, pack_name):
         toml_path = os.path.join(game_path, "config_eldenring.toml")
-        if not os.path.exists(toml_path):
-            print(f"TOML config not found: {toml_path}")
+        if not self.ensure_config_exists(toml_path):
             return
 
         # Define configurations
@@ -1106,14 +1586,8 @@ class EldenRingLauncher(ctk.CTk):
                 "dlls": '["ersc.dll", "Scripts-Data-Exposer-FS.dll", "waygate_client.dll"]',
                 "mods": '[{ enabled = false, name = "modpack", path = "modpack" }]'
             },
-            "Quality of Life": {
-                "dlls": '["er_alt_saves.dll", "ersc.dll", "erquestlog.dll", "Scripts-Data-Exposer-FS.dll", "waygate_client.dll"]',
-                "mods": '[{ enabled = true, name = "mod_qol", path = "mod_qol" }]'
-            },
-            "Diablo Loot (RNG)": {
-                "dlls": '["er_alt_saves.dll", "ersc.dll", "erquestlog.dll", "Scripts-Data-Exposer-FS.dll", "waygate_client.dll"]',
-                "mods": '[{ enabled = true, name = "mod_rng", path = "mod_rng" }]'
-            }
+            "Quality of Life": self.get_mod_config("Quality of Life"),
+            "Diablo Loot (RNG)": self.get_mod_config("Diablo Loot (RNG)")
         }
 
         config = configs.get(pack_name, configs["Vanilla"])
@@ -1157,6 +1631,7 @@ class EldenRingLauncher(ctk.CTk):
         except:
             return fallback
 
+
     def update_save_converter_state(self):
         """Restore save converter state (enabled for all modes including Vanilla)."""
         current_mod = self.modpack_var.get()
@@ -1165,7 +1640,7 @@ class EldenRingLauncher(ctk.CTk):
         self.conv_checkbox.configure(state="normal", text_color="#d4af37")
 
     def handle_save_conversion(self, mode):
-        """Rename save files between .mod/.sl2 and .co2 based on mode and modpack."""
+        """Rename all save files (ER0000-ER0009, .mod, and .bak) between .sl2 and .co2 extensions."""
         if self.read_config_value("auto_save_converter", "0") != "1":
             return True
 
@@ -1174,58 +1649,55 @@ class EldenRingLauncher(ctk.CTk):
             self.update_status(self._t("save_folder_not_found"), "#ff4444")
             return False
 
-        current_mod = self.modpack_var.get()
-        is_vanilla = (current_mod == self._t("vanilla") or current_mod == "Vanilla")
-
         self.update_status(self._t("converting_saves"), "#d4af37")
         
         try:
             files = os.listdir(save_folder)
             count = 0
-            if mode == "seamless":
-                # Seamless targets: .co2
-                for f in files:
-                    old_path = os.path.join(save_folder, f)
-                    if is_vanilla:
-                        # Vanilla: .sl2 -> .co2 (ignore .mod.co2)
-                        if f.endswith(".sl2"):
-                            new_path = old_path[:-4] + ".co2"
-                            if os.path.exists(new_path): os.remove(new_path)
-                            os.rename(old_path, new_path)
-                            count += 1
-                    else:
-                        # Modpack: .mod -> .mod.co2
-                        if f.endswith(".mod"):
-                            new_path = old_path + ".co2"
-                            if os.path.exists(new_path): os.remove(new_path)
-                            os.rename(old_path, new_path)
-                            count += 1
-            elif mode == "online":
-                # Online targets: .sl2 (Vanilla) or .mod (Modpack)
-                for f in files:
-                    old_path = os.path.join(save_folder, f)
-                    if is_vanilla:
-                        # Vanilla: .co2 -> .sl2
-                        # CRITICAL: Do NOT convert .mod.co2 in vanilla!
-                        if f.endswith(".co2") and not f.endswith(".mod.co2"):
-                            new_path = old_path[:-4] + ".sl2"
-                            if os.path.exists(new_path): os.remove(new_path)
-                            os.rename(old_path, new_path)
-                            count += 1
-                    else:
-                        # Modpack: .mod.co2 -> .mod
-                        if f.endswith(".mod.co2"):
-                            new_path = old_path[:-4] # Remove .co2
-                            if os.path.exists(new_path): os.remove(new_path)
-                            os.rename(old_path, new_path)
-                            count += 1
+            
+            for f in files:
+                old_path = os.path.join(save_folder, f)
+                f_lower = f.lower()
+                
+                if not f_lower.startswith("er000"):
+                    continue
+                
+                new_f = None
+                if mode == "seamless":
+                    # Standard: .sl2 -> .co2
+                    if f_lower.endswith(".sl2"):
+                        new_f = f[:-4] + ".co2"
+                    # Alternative: .mod -> .mod.co2
+                    elif f_lower.endswith(".mod"):
+                        new_f = f + ".co2"
+                    # .bak versions
+                    elif f_lower.endswith(".sl2.bak"):
+                        new_f = f.replace(".sl2.bak", ".co2.bak")
+                else: # online
+                    # Standard: .co2 -> .sl2
+                    if f_lower.endswith(".co2") and not f_lower.endswith(".mod.co2"):
+                        new_f = f[:-4] + ".sl2"
+                    # Alternative: .mod.co2 -> .mod
+                    elif f_lower.endswith(".mod.co2"):
+                        new_f = f[:-4]
+                    # .bak versions
+                    elif f_lower.endswith(".co2.bak"):
+                        new_f = f.replace(".co2.bak", ".sl2.bak")
+
+                if new_f:
+                    new_path = os.path.join(save_folder, new_f)
+                    if os.path.exists(new_path):
+                        os.remove(new_path)
+                    os.rename(old_path, new_path)
+                    count += 1
             
             if count > 0:
-                print(f"Converted {count} save files for {mode} mode (Modpack: {current_mod}).")
+                print(f"Converted {count} save files for {mode} mode.")
             return True
         except Exception as e:
             self.update_status(f"Save conversion error: {e}", "#ff4444")
             return False
+
 
     def launch_seamless(self):
         if self.is_game_running():
@@ -1240,6 +1712,8 @@ class EldenRingLauncher(ctk.CTk):
         if os.path.exists(self.launch_exe):
             self.update_status(self._t("launch_seamless"), "#d4af37")
             subprocess.Popen([self.launch_exe], cwd=self.game_dir)
+            self.launch_start_time = time.time()
+            
         else:
             self.update_status(self._t("exe_not_found"), "#ff4444")
 
@@ -1255,6 +1729,8 @@ class EldenRingLauncher(ctk.CTk):
         if os.path.exists(self.launch_exe):
             self.update_status(self._t("launch_online"), "#d4af37")
             subprocess.Popen([self.launch_exe], cwd=self.game_dir)
+            self.launch_start_time = time.time()
+
         else:
             self.update_status(self._t("exe_not_found"), "#ff4444")
 
@@ -1267,6 +1743,22 @@ class EldenRingLauncher(ctk.CTk):
     def repair_modpack(self):
         if self.game_dir:
             self.show_bootstrap_ui(self.game_dir)
+
+    def set_lockdown(self, locked):
+        """Show or hide the lockdown overlay when the game is running."""
+        if locked:
+            if not self.lockdown_frame:
+                # Create frame on the main window (self) to cover everything
+                self.lockdown_frame = ctk.CTkFrame(self, fg_color="#0f0f0f", corner_radius=0)
+                self.lockdown_status = ctk.CTkLabel(self.lockdown_frame, text=self._t("lockdown_message"), 
+                                                   font=("Cinzel", 18, "bold"), text_color="#d4af37", wraplength=400)
+                self.lockdown_status.place(relx=0.5, rely=0.5, anchor="center")
+            
+            self.lockdown_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
+            self.lockdown_frame.lift() # Ensure it's on top
+        else:
+            if self.lockdown_frame:
+                self.lockdown_frame.place_forget()
 
 if __name__ == "__main__":
     app = EldenRingLauncher()
