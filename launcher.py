@@ -60,6 +60,10 @@ def run_as_admin():
         return False
 
 class EldenRingLauncher(ctk.CTk):
+    VERSION = "1.0"
+    VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/main/version.txt"
+    UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
+
     def __init__(self):
         super().__init__()
 
@@ -155,6 +159,9 @@ class EldenRingLauncher(ctk.CTk):
             print(f"Error applying UI scaling: {e}")
             ctk.set_widget_scaling(1.0)
             ctk.set_window_scaling(1.0)
+
+        # Check for updates on startup
+        self.check_for_updates()
 
         # UI Setup (Base)
         self.lockdown_frame = None
@@ -865,6 +872,12 @@ class EldenRingLauncher(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self, fg_color="#151515", corner_radius=15, border_width=1, border_color="#d4af37")
         if self.show_chat:
             self.sidebar_frame.place(relx=0.68, rely=0.05, relwidth=0.30, relheight=0.9)
+            
+        # Create Update Button (Hidden by default, packed by show_update_available)
+        self.update_btn = ctk.CTkButton(self.sidebar_frame, text="Update Available!", 
+                                        command=self.perform_update,
+                                        fg_color="#e15f41", hover_color="#c44569",
+                                        font=("Arial", 12, "bold"))
             
         # Top Header Frame for Title and Toggle
         header_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
@@ -2251,6 +2264,69 @@ class EldenRingLauncher(ctk.CTk):
         else:
             if self.lockdown_frame:
                 self.lockdown_frame.place_forget()
+
+    def check_for_updates(self):
+        """Check for updates in a background thread."""
+        def check():
+            try:
+                # Fetch remote version
+                with urllib.request.urlopen(self.VERSION_URL) as response:
+                    remote_version = response.read().decode('utf-8').strip()
+                
+                print(f"Local Version: {self.VERSION}, Remote Version: {remote_version}")
+                
+                if remote_version != self.VERSION:
+                    self.after(0, lambda: self.show_update_available(remote_version))
+                    
+            except Exception as e:
+                print(f"Update check failed: {e}")
+
+        threading.Thread(target=check, daemon=True).start()
+
+    def show_update_available(self, new_version):
+        """Show the update button in the UI."""
+        if hasattr(self, 'update_btn'):
+            self.update_btn.configure(text=f"Update Available! (v{new_version})")
+            # Pack it at the bottom of the sidebar
+            if hasattr(self, 'sidebar_frame'):
+                 self.update_btn.pack(side="bottom", pady=20, padx=20)
+            
+            # Flash effect or highlight
+            self.update_btn.configure(fg_color="#e15f41", hover_color="#c44569")
+
+    def perform_update(self):
+        """Download new version and restart using a batch script."""
+        try:
+            print("Downloading update...")
+            self.update_btn.configure(text="Downloading...", state="disabled")
+            
+            # dynamic update name
+            new_exe = "ER_Launcher_new.exe"
+            urllib.request.urlretrieve(self.UPDATE_URL, new_exe)
+            
+            print("Download complete. Preparing update script...")
+            
+            # Create update batch script
+            bat_script = """
+@echo off
+timeout /t 2 /nobreak > nul
+del "ER_Launcher.exe"
+move "ER_Launcher_new.exe" "ER_Launcher.exe"
+start "" "ER_Launcher.exe"
+del "%~f0"
+"""
+            with open("update.bat", "w") as f:
+                f.write(bat_script)
+                
+            # Launch script and exit
+            subprocess.Popen("update.bat", shell=True)
+            self.destroy()
+            sys.exit(0)
+            
+        except Exception as e:
+            print(f"Update failed: {e}")
+            self.update_btn.configure(text="Update Failed!", fg_color="red")
+            self.after(3000, lambda: self.update_btn.configure(text=f"Update Available!", state="normal"))
 
 if __name__ == "__main__":
     app = EldenRingLauncher()
