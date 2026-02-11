@@ -60,8 +60,8 @@ def run_as_admin():
         return False
 
 class EldenRingLauncher(ctk.CTk):
-    VERSION = "1.0"
-    VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/main/version.txt"
+    VERSION = "1.1.0"
+    VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
 
     def __init__(self):
@@ -873,22 +873,16 @@ class EldenRingLauncher(ctk.CTk):
         if self.show_chat:
             self.sidebar_frame.place(relx=0.68, rely=0.05, relwidth=0.30, relheight=0.9)
             
-        # Create Update Button (Hidden by default, packed by show_update_available)
-        self.update_btn = ctk.CTkButton(self.sidebar_frame, text="Update Available!", 
-                                        command=self.perform_update,
-                                        fg_color="#e15f41", hover_color="#c44569",
-                                        font=("Arial", 12, "bold"))
-            
         # Top Header Frame for Title and Toggle
-        header_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
-        header_frame.pack(fill="x", pady=(10, 0), padx=20)
+        self.header_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        self.header_frame.pack(fill="x", pady=(10, 0), padx=20)
         
-        self.label = ctk.CTkLabel(header_frame, text=self._t("app_title"), font=("Cinzel", 36, "bold"), text_color="#d4af37")
+        self.label = ctk.CTkLabel(self.header_frame, text=self._t("app_title"), font=("Cinzel", 36, "bold"), text_color="#d4af37")
         self.label.pack(side="left", expand=True, padx=(50, 0)) # Push to center
         
         # Chat Toggle Button
         toggle_text = self._t("chat_hide") if self.show_chat else self._t("chat_show")
-        self.chat_toggle_btn = ctk.CTkButton(header_frame, text=toggle_text, width=100, height=25,
+        self.chat_toggle_btn = ctk.CTkButton(self.header_frame, text=toggle_text, width=100, height=25,
                                              font=("Arial", 10, "bold"),
                                              fg_color="#1a1a1a", border_width=1, border_color="#d4af37",
                                              command=self.toggle_chat)
@@ -1071,9 +1065,20 @@ class EldenRingLauncher(ctk.CTk):
         if current_mod in ["Quality of Life", "Diablo Loot (RNG)"]:
             self.create_mod_settings_tab()
 
-        # Status Label (Inside the content overlay)
-        self.status_label = ctk.CTkLabel(self.content_frame, text="", text_color="gray", font=("Arial", 11), wraplength=480)
-        self.status_label.pack(side="bottom", pady=10)
+        # Footer Frame (Status + Update Button)
+        self.footer_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        self.footer_frame.pack(side="bottom", fill="x", pady=10, padx=20)
+
+        # Create Update Button (Hidden by default, parented to footer)
+        self.update_btn = ctk.CTkButton(self.footer_frame, text="Update Available!", 
+                                        command=self.perform_update,
+                                        width=200, height=30,
+                                        fg_color="#e15f41", hover_color="#c44569",
+                                        font=("Arial", 12, "bold"))
+
+        # Status Label (Inside the footer)
+        self.status_label = ctk.CTkLabel(self.footer_frame, text="", text_color="gray", font=("Arial", 11), wraplength=480)
+        self.status_label.pack(side="bottom")
 
     def toggle_chat(self):
         """Toggle chat visibility and resize window."""
@@ -2287,9 +2292,16 @@ class EldenRingLauncher(ctk.CTk):
         """Show the update button in the UI."""
         if hasattr(self, 'update_btn'):
             self.update_btn.configure(text=f"Update Available! (v{new_version})")
-            # Pack it at the bottom of the sidebar
-            if hasattr(self, 'sidebar_frame'):
-                 self.update_btn.pack(side="bottom", pady=20, padx=20)
+            
+            # Pack into the footer (above status label)
+            # Since status_label is packed side="bottom", packing update_btn side="top" or "bottom" works.
+            # Let's pack it to the TOP of the footer, pushing status label down?
+            # Or just pack it. Since status_label is already packed, packing update_btn will place it...
+            # Wait, if we use pack(side="top"), it goes to the top of footer.
+            try:
+                self.update_btn.pack(side="top", pady=(0, 5))
+            except:
+                pass
             
             # Flash effect or highlight
             self.update_btn.configure(fg_color="#e15f41", hover_color="#c44569")
@@ -2309,19 +2321,23 @@ class EldenRingLauncher(ctk.CTk):
             # Create update batch script
             bat_script = """
 @echo off
-timeout /t 2 /nobreak > nul
+timeout /t 3 /nobreak > nul
 del "ER_Launcher.exe"
 move "ER_Launcher_new.exe" "ER_Launcher.exe"
+set _MEIPASS2=
+set PYTHONPATH=
 start "" "ER_Launcher.exe"
 del "%~f0"
 """
             with open("update.bat", "w") as f:
                 f.write(bat_script)
                 
-            # Launch script and exit
-            subprocess.Popen("update.bat", shell=True)
-            self.destroy()
-            sys.exit(0)
+            # Launch script and exit safely
+            # Use CREATE_NEW_CONSOLE to ensure it lives on
+            subprocess.Popen("update.bat", shell=True, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            
+            # Use os._exit to bypass cleanup handlers that might crash
+            self.after(100, lambda: os._exit(0))
             
         except Exception as e:
             print(f"Update failed: {e}")
