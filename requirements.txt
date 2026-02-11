@@ -3,3 +3,4 @@ pyinstaller
 configparser
 Pillow
 pypresence
+websockets

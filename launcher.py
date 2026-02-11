@@ -1,11 +1,14 @@
 import os
 import time
+import webbrowser
+import uuid
 from datetime import datetime
 import shutil
 import sys
 import subprocess
 import configparser
 import customtkinter as ctk
+import tkinter as tk
 import json
 import threading
 import urllib.request
@@ -13,6 +16,9 @@ import zipfile
 import io
 import ctypes
 import struct
+import asyncio
+import websockets
+import queue
 from PIL import Image, ImageFilter, ImageEnhance, ImageDraw
 from translations import TRANSLATIONS, LANGUAGES_LIST
 
@@ -106,11 +112,26 @@ class EldenRingLauncher(ctk.CTk):
         self.qol_fps_limit_var = ctk.IntVar(value=min(300, fps_limit))
         self.disable_sharpening_var = ctk.BooleanVar(value=self.read_config_value("disable_sharpening", "True") == "True")
         
+        self.chat_nickname_var = ctk.StringVar(value=self.read_config_value("chat_nickname", ""))
+        
+        # Identity Verification (Tripcodes)
+        self.chat_user_id = self.read_config_value("chat_user_id", "")
+        if not self.chat_user_id:
+            self.chat_user_id = str(uuid.uuid4())
+            self.save_config_value("chat_user_id", self.chat_user_id)
+            
+        self.show_chat = self.read_config_value("show_chat", "True") == "True"
+        self.chat_queue = queue.Queue()
+        self.chat_socket = None
+        self.chat_thread = None
+        self.last_send_time = 0 # Anti-spam
+        
         self.scroll_frame = None
         self.current_tab_key = "tab_play"
         
-        # Center the window
-        self.center_window(600, 550)
+        # Set window size based on chat visibility
+        initial_width = 1000 if self.show_chat else 660
+        self.center_window(initial_width, 550)
         
         # Set Window Icon
         self.icon_path = resource_path("app_icon.ico")
@@ -342,7 +363,7 @@ class EldenRingLauncher(ctk.CTk):
         self.bg_image_path = resource_path("background.png")
         if os.path.exists(self.bg_image_path):
             bg_pil = Image.open(self.bg_image_path)
-            self.bg_image = ctk.CTkImage(light_image=bg_pil, dark_image=bg_pil, size=(600, 550))
+            self.bg_image = ctk.CTkImage(light_image=bg_pil, dark_image=bg_pil, size=(1000, 550))
             self.bg_label = ctk.CTkLabel(self, image=self.bg_image, text="")
             self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
 
@@ -365,6 +386,10 @@ class EldenRingLauncher(ctk.CTk):
         self.fade_in()
 
     def show_setup_view(self):
+        # Restore overlay for setup
+        self.overlay.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.85, relheight=0.9)
+        self.overlay.configure(fg_color="#151515", border_width=1)
+        
         # Clear overlay for setup
         for widget in self.overlay.winfo_children():
             widget.destroy()
@@ -816,17 +841,51 @@ class EldenRingLauncher(ctk.CTk):
         self.setup_ui()
 
     def show_main_view(self):
-        # Clear overlay for main
-        for widget in self.overlay.winfo_children():
-            widget.destroy()
+        # Hide the setup overlay
+        self.overlay.place_forget()
+        
+        # Cleanup any previous main view frames if refreshing
+        if hasattr(self, 'content_frame'):
+            try: self.content_frame.destroy()
+            except: pass
+        if hasattr(self, 'sidebar_frame'):
+            try: self.sidebar_frame.destroy()
+            except: pass
             
-        self.label = ctk.CTkLabel(self.overlay, text=self._t("app_title"), font=("Cinzel", 36, "bold"), text_color="#d4af37")
-        self.label.pack(pady=(20, 2))
-        self.sub_label = ctk.CTkLabel(self.overlay, text=self._t("app_subtitle"), font=("Arial", 11, "bold", "italic"), text_color="#c0c0c0")
+        # Left Side (Main Content Panel) - Placed directly on self for transparency
+        self.content_frame = ctk.CTkFrame(self, fg_color="#151515", corner_radius=15, border_width=1, border_color="#d4af37")
+        
+        # Position based on chat visibility
+        if self.show_chat:
+            self.content_frame.place(relx=0.02, rely=0.05, relwidth=0.64, relheight=0.9)
+        else:
+            self.content_frame.place(relx=0.05, rely=0.05, relwidth=0.9, relheight=0.9)
+        
+        # Right Side (Chat Panel) - Placed directly on self for transparency
+        self.sidebar_frame = ctk.CTkFrame(self, fg_color="#151515", corner_radius=15, border_width=1, border_color="#d4af37")
+        if self.show_chat:
+            self.sidebar_frame.place(relx=0.68, rely=0.05, relwidth=0.30, relheight=0.9)
+            
+        # Top Header Frame for Title and Toggle
+        header_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        header_frame.pack(fill="x", pady=(10, 0), padx=20)
+        
+        self.label = ctk.CTkLabel(header_frame, text=self._t("app_title"), font=("Cinzel", 36, "bold"), text_color="#d4af37")
+        self.label.pack(side="left", expand=True, padx=(50, 0)) # Push to center
+        
+        # Chat Toggle Button
+        toggle_text = self._t("chat_hide") if self.show_chat else self._t("chat_show")
+        self.chat_toggle_btn = ctk.CTkButton(header_frame, text=toggle_text, width=100, height=25,
+                                             font=("Arial", 10, "bold"),
+                                             fg_color="#1a1a1a", border_width=1, border_color="#d4af37",
+                                             command=self.toggle_chat)
+        self.chat_toggle_btn.pack(side="right")
+
+        self.sub_label = ctk.CTkLabel(self.content_frame, text=self._t("app_subtitle"), font=("Arial", 11, "bold", "italic"), text_color="#c0c0c0")
         self.sub_label.pack(pady=(0, 10))
 
-        # Create Tabview
-        self.tabview = ctk.CTkTabview(self.overlay, fg_color="transparent", 
+        # Create Tabview (in content_frame)
+        self.tabview = ctk.CTkTabview(self.content_frame, fg_color="transparent", 
                                         segmented_button_selected_color="#3e4a3d",
                                         segmented_button_selected_hover_color="#4e5b4d",
                                         segmented_button_unselected_hover_color="#333333",
@@ -836,16 +895,23 @@ class EldenRingLauncher(ctk.CTk):
         self.tab_play = self.tabview.add(self._t("tab_play"))
         self.tab_settings = self.tabview.add(self._t("tab_settings"))
         self.tab_tools = self.tabview.add(self._t("tab_tools"))
+        self.tab_about = self.tabview.add(self._t("tab_about"))
         
         # Restore active tab with a robust fallback
         try:
             target_tab_name = self._t(self.current_tab_key)
-            self.tabview.set(target_tab_name)
+            if target_tab_name != self._t("tab_chat"): # Skip chat tab as it's now in sidebar
+                self.tabview.set(target_tab_name)
+            else:
+                self.tabview.set(self._t("tab_play"))
         except Exception:
             try:
                 self.tabview.set(self._t("tab_play"))
             except:
                 pass
+
+        # --- CHAT SIDEBAR ---
+        self.setup_chat_sidebar(self.sidebar_frame)
 
         # --- PLAY TAB ---
 
@@ -983,15 +1049,39 @@ class EldenRingLauncher(ctk.CTk):
                        fg_color="#1a1a1a", hover_color="#3e4a3d",
                        text_color="#aaaaaa").pack(pady=10)
 
+        # --- ABOUT TAB ---
+        self.setup_about_tab()
+
         # --- MOD SETTINGS TAB (conditionally shown) ---
         # Check if QoL or Diablo is selected and add tab
         current_mod = self.read_config_value('modpack', "Vanilla")
         if current_mod in ["Quality of Life", "Diablo Loot (RNG)"]:
             self.create_mod_settings_tab()
 
-        # Status Label (Stay at the bottom of overlay, outside tabs)
-        self.status_label = ctk.CTkLabel(self.overlay, text="", text_color="gray", font=("Arial", 11), wraplength=480)
-        self.status_label.pack(side="bottom", pady=5)
+        # Status Label (Inside the content overlay)
+        self.status_label = ctk.CTkLabel(self.content_frame, text="", text_color="gray", font=("Arial", 11), wraplength=480)
+        self.status_label.pack(side="bottom", pady=10)
+
+    def toggle_chat(self):
+        """Toggle chat visibility and resize window."""
+        self.show_chat = not self.show_chat
+        self.save_config_value("show_chat", str(self.show_chat))
+        
+        if self.show_chat:
+            # Show Chat
+            self.geometry("1000x550")
+            self.content_frame.place(relx=0.02, rely=0.05, relwidth=0.64, relheight=0.9)
+            self.sidebar_frame.place(relx=0.68, rely=0.05, relwidth=0.30, relheight=0.9)
+            self.chat_toggle_btn.configure(text=self._t("chat_hide"))
+        else:
+            # Hide Chat
+            self.geometry("660x550")
+            self.sidebar_frame.place_forget()
+            self.content_frame.place(relx=0.05, rely=0.05, relwidth=0.9, relheight=0.9)
+            self.chat_toggle_btn.configure(text=self._t("chat_show"))
+        
+        # Re-center window after resize
+        self.center_window(1000 if self.show_chat else 660, 550)
 
 
     def create_mod_settings_tab(self):
@@ -1273,6 +1363,408 @@ class EldenRingLauncher(ctk.CTk):
             ctk.set_window_scaling(val)
         except Exception as e:
             print(f"Error applying real-time scaling: {e}")
+
+    def setup_chat_sidebar(self, parent):
+        """Setup the UI for the Global Chat Sidebar."""
+        
+        # Reset color tags state since we are creating a fresh text widget
+        if hasattr(self, 'created_color_tags'):
+            del self.created_color_tags
+
+        # Top Frame for Nickname
+        nick_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        nick_frame.pack(fill="x", padx=10, pady=5)
+        
+        ctk.CTkLabel(nick_frame, text=self._t("chat_nickname_label"), font=("Arial", 11, "bold")).pack(side="top", anchor="w", padx=5)
+        self.chat_nick_entry = tk.Entry(nick_frame, textvariable=self.chat_nickname_var,
+                                        bg="#1a1a1a", fg="white", insertbackground="white", 
+                                        relief="flat", font=("Arial", 12))
+        self.chat_nick_entry.pack(fill="x", padx=5, pady=(2, 5), ipady=3)
+        self.chat_nick_entry.bind("<FocusOut>", lambda e: self.save_config_value("chat_nickname", self.chat_nickname_var.get()))
+        
+        self.chat_status_label = ctk.CTkLabel(nick_frame, text=self._t("chat_disconnected"), font=("Arial", 10), text_color="gray")
+        self.chat_status_label.pack(side="top", anchor="e", padx=10)
+
+        # Chat History
+        self.chat_history = ctk.CTkTextbox(parent, state="disabled", wrap="word", font=("Segoe UI Emoji", 11), fg_color="#0d0d0d")
+        self.chat_history.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Request full history from server if we are reconnecting UI
+        if self.chat_socket and hasattr(self, 'send_queue'):
+            try:
+                self.send_queue.put(json.dumps({"type": "request_history"}))
+            except Exception as e:
+                print(f"Error requesting history: {e}")
+        
+        # Bottom Frame for Input
+        input_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        input_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        # Input field with Emoji button
+        input_sub_frame = ctk.CTkFrame(input_frame, fg_color="transparent")
+        input_sub_frame.pack(fill="x", pady=(0, 5))
+        
+        self.chat_input = tk.Entry(input_sub_frame, bg="#1a1a1a", fg="white", 
+                                   insertbackground="white", font=("Segoe UI Emoji", 11),
+                                   bd=1, relief="solid", highlightthickness=1, 
+                                   highlightbackground="#d4af37", highlightcolor="#d4af37")
+        self.chat_input.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=5) # ipady for height
+        self.chat_input.bind("<Return>", lambda e: self.send_chat_message())
+        
+        # Emoji Picker logic (Hybrid: Built-in + System Hint)
+        self.emoji_list = [
+            "😀", "😂", "🤣", "😊", "😍", "🤔", "🙄", "📢", "⚔️", "🛡️", "🔥", "✨", 
+            "💀", "👍", "👎", "🎉", "❤️", "💔", "🌟", "👀", "👋", "🙌", "👑", "💪",
+            "⚡", "🎮", "🗡️", "🏹", "🧪", "🧙", "👹", "🏆"
+        ]
+        self.emoji_btn = ctk.CTkButton(input_sub_frame, text="😀", width=35, height=35, 
+                                       fg_color="#1a1a1a", border_width=1, border_color="#d4af37",
+                                       command=self.show_emoji_menu)
+        self.emoji_btn.pack(side="right")
+        
+        self.chat_send_btn = ctk.CTkButton(input_frame, text=self._t("chat_send_btn"), height=35, 
+                                           command=self.send_chat_message, fg_color="#3e4a3d", hover_color="#4e5b4d")
+        self.chat_send_btn.pack(fill="x")
+        
+        self.chat_count_label = ctk.CTkLabel(input_frame, text="", font=("Arial", 10), text_color="#aaaaaa")
+        self.chat_count_label.pack(side="top", pady=(5, 0))
+        
+        # Start connection process if not already running
+        if not self.chat_thread or not self.chat_thread.is_alive():
+            self.connect_chat()
+        
+        # If already connected (e.g. after language refresh), update UI immediately
+        elif self.chat_socket:
+             self.chat_status_label.configure(text=self._t("chat_connected"), text_color="green")
+             if hasattr(self, 'online_count'):
+                 self.chat_count_label.configure(text=self._t("chat_online_count").format(count=self.online_count))
+        
+        if not hasattr(self, '_chat_polling_started'):
+            self.receive_chat_messages()
+            self._chat_polling_started = True
+
+    def setup_about_tab(self):
+        """Setup the content for the About tab with a side-by-side layout."""
+        # Main container (no scroll unless window is very small)
+        main_container = ctk.CTkFrame(self.tab_about, fg_color="transparent")
+        main_container.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Title at the very top
+        ctk.CTkLabel(main_container, text=self._t("about_title"), font=("Cinzel", 26, "bold"), text_color="#d4af37").pack(pady=(0, 20))
+
+        # Horizontal split frame
+        split_frame = ctk.CTkFrame(main_container, fg_color="transparent")
+        split_frame.pack(fill="both", expand=True)
+
+        # --- Left Column: Who are we? ---
+        left_col = ctk.CTkFrame(split_frame, fg_color="#1a1a1a", border_width=1, border_color="#d4af37")
+        left_col.pack(side="left", fill="both", expand=True, padx=(0, 10))
+
+        ctk.CTkLabel(left_col, text=self._t("about_spp_title"), font=("Arial", 16, "bold"), text_color="#d4af37").pack(pady=(15, 10))
+        
+        desc_label = ctk.CTkLabel(left_col, text=self._t("about_spp_desc"), 
+                                  font=("Arial", 12), text_color="#cccccc", 
+                                  wraplength=280, justify="center")
+        desc_label.pack(padx=15, pady=(0, 20), fill="both", expand=True)
+
+        # --- Right Column: Support ---
+        right_col = ctk.CTkFrame(split_frame, fg_color="#1a1a1a", border_width=1, border_color="#d4af37")
+        right_col.pack(side="right", fill="both", expand=True, padx=(10, 0))
+
+        ctk.CTkLabel(right_col, text=self._t("about_support_title"), font=("Arial", 16, "bold"), text_color="#d4af37").pack(pady=(15, 10))
+
+        # Support Buttons
+        btns_container = ctk.CTkFrame(right_col, fg_color="transparent")
+        btns_container.pack(pady=5, expand=True)
+
+        # Discord
+        ctk.CTkButton(btns_container, text=f"💬 {self._t('about_discord')}", 
+                      command=lambda: webbrowser.open("https://discord.gg/wYyXVTS9bz"),
+                      fg_color="#5865F2", hover_color="#4752C4", width=180, height=38,
+                      font=("Arial", 11, "bold")).pack(pady=8)
+
+        # Patreon
+        ctk.CTkButton(btns_container, text=f"❤️ {self._t('about_patreon')}", 
+                      command=lambda: webbrowser.open("https://www.patreon.com/conan513"),
+                      fg_color="#F96854", hover_color="#E05B48", width=180, height=38,
+                      font=("Arial", 11, "bold")).pack(pady=8)
+
+        # PayPal
+        ctk.CTkButton(btns_container, text=f"💸 {self._t('about_paypal')}", 
+                      command=lambda: webbrowser.open("https://www.paypal.com/donate/?hosted_button_id=3J7L23CSNBVUG"),
+                      fg_color="#003087", hover_color="#00256B", width=180, height=38,
+                      font=("Arial", 11, "bold")).pack(pady=8)
+
+        # Version info at bottom
+        version_text = f"ER Launcher v{getattr(self, 'VERSION', '1.0.0')}"
+        ctk.CTkLabel(main_container, text=version_text, font=("Arial", 10), text_color="#666666").pack(side="bottom", pady=(10, 0))
+
+    def show_emoji_menu(self):
+        """Show a popup with built-in emojis and a hint for the system picker."""
+        if hasattr(self, 'emoji_popup') and self.emoji_popup.winfo_exists():
+            self.emoji_popup.destroy()
+            return
+
+        self.emoji_popup = ctk.CTkToplevel(self)
+        self.emoji_popup.title("")
+        self.emoji_popup.geometry("180x330")
+        self.emoji_popup.attributes("-topmost", True)
+        self.emoji_popup.resizable(False, False)
+        self.emoji_popup.overrideredirect(True)
+        
+        # Position near the button
+        x = self.emoji_btn.winfo_rootx() - 150
+        y = self.emoji_btn.winfo_rooty() - 335
+        self.emoji_popup.geometry(f"+{x}+{y}")
+        
+        frame = ctk.CTkFrame(self.emoji_popup, fg_color="#1a1a1a", border_width=1, border_color="#d4af37")
+        frame.pack(fill="both", expand=True)
+
+        # Quick Emojis
+        inner_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        inner_frame.pack(padx=2, pady=5)
+        
+        for i, emoji in enumerate(self.emoji_list):
+            btn = ctk.CTkButton(inner_frame, text=emoji, width=38, height=32, 
+                                 fg_color="transparent", hover_color="#333333",
+                                 font=("Segoe UI Emoji", 12),
+                                 command=lambda e=emoji: self.add_emoji(e))
+            btn.grid(row=i // 4, column=i % 4, padx=1, pady=1)
+
+        # System Hint Button
+        hint_btn = ctk.CTkButton(frame, text="Win + . (Full Selection)", font=("Segoe UI", 10, "bold"), height=28,
+                                  fg_color="#2a2a2a", hover_color="#3a3a3a", border_width=1, border_color="#d4af37",
+                                  command=lambda: [self.show_emoji_hint(), self.emoji_popup.destroy()])
+        hint_btn.pack(fill="x", padx=10, pady=(5, 10))
+
+    def show_emoji_hint(self):
+        """Show a hint about the native Windows emoji picker and force focus."""
+        from tkinter import messagebox
+        messagebox.showinfo("Emoji", self._t("chat_emoji_hint"))
+        self.chat_input.focus_set() # Force focus back to allow system picker to find it
+
+    def add_emoji(self, emoji):
+        """Insert emoji into chat input and return focus."""
+        current = self.chat_input.get()
+        self.chat_input.delete(0, "end")
+        self.chat_input.insert(0, current + emoji)
+        self.emoji_popup.destroy()
+        self.chat_input.focus_set() # Crucial for system integration
+
+    def connect_chat(self):
+        """Start the background thread for WebSocket connection."""
+        if not self.chat_thread or not self.chat_thread.is_alive():
+            self.chat_status_label.configure(text=self._t("chat_connecting"), text_color="orange")
+            self.chat_thread = threading.Thread(target=self.chat_loop, daemon=True)
+            self.chat_thread.start()
+
+    def chat_loop(self):
+        """Background loop to handle WebSocket communication."""
+        self.send_queue = queue.Queue()
+
+        async def run():
+            uri = "ws://94.72.100.43:8765" # Public server
+            try:
+                async with websockets.connect(uri) as websocket:
+                    self.chat_socket = websocket
+                    self.chat_queue.put({"type": "status", "connected": True})
+                    
+                    # Create tasks for receiving and sending
+                    async def receive():
+                        try:
+                            async for message in websocket:
+                                try:
+                                    data = json.loads(message)
+                                    self.chat_queue.put(data)
+                                except json.JSONDecodeError:
+                                    pass
+                        except Exception as e:
+                            print(f"Receive error: {e}")
+                    
+                    async def send():
+                        while True:
+                            try:
+                                while not self.send_queue.empty():
+                                    payload = self.send_queue.get_nowait()
+                                    await websocket.send(payload)
+                            except queue.Empty:
+                                pass
+                            except Exception as e:
+                                print(f"Send error: {e}")
+                                break # Exit send loop if connection lost
+                            await asyncio.sleep(0.1)
+                    
+                    # Wait for either to finish (usually receive finishes when socket closes)
+                    await asyncio.gather(receive(), send())
+                    
+            except Exception as e:
+                print(f"Chat connection error: {e}")
+            finally:
+                self.chat_socket = None
+                self.chat_queue.put({"type": "status", "connected": False})
+
+        asyncio.run(run())
+
+    def send_chat_message(self):
+        """Send a message from the input field to the server."""
+        from tkinter import messagebox
+        
+        msg = self.chat_input.get().strip()
+        nick = self.chat_nickname_var.get().strip()
+        
+        if not msg:
+            return
+
+        if len(msg) > 500:
+            messagebox.showwarning("Warning", "Message is too long! (Max 500 characters)")
+            return
+        
+        if not nick:
+            messagebox.showwarning(self._t("warning") if TRANSLATIONS[self.lang_var.get()].get("warning") else "Warning", 
+                                   self._t("chat_nick_required"))
+            return
+
+        if self.chat_socket:
+            # Client-side Anti-spam (3s)
+            now = time.time()
+            if now - self.last_send_time < 3:
+                self.chat_status_label.configure(text="Spam protection: 3s", text_color="red")
+                self.after(2000, lambda: self.chat_status_label.configure(
+                    text=self._t("chat_connected"), text_color="green") if self.chat_socket else None)
+                return
+
+            payload = json.dumps({
+                "type": "chat", 
+                "nickname": nick, 
+                "message": msg,
+                "user_id": self.chat_user_id
+            }, ensure_ascii=False)
+            if not hasattr(self, 'send_queue'):
+                self.send_queue = queue.Queue()
+            self.send_queue.put(payload)
+            self.last_send_time = now # Update cooldown
+            self.chat_input.delete(0, 'end')
+
+    def receive_chat_messages(self):
+        """Poll the chat queue and update the UI."""
+        if not hasattr(self, 'online_count'):
+            self.online_count = 0
+            
+        try:
+            while True:
+                try:
+                    data = self.chat_queue.get_nowait()
+                except queue.Empty:
+                    break
+
+                # Safety check: Ensure UI elements exist before updating
+                if not hasattr(self, 'chat_history') or not self.chat_history.winfo_exists():
+                    continue
+
+                if data["type"] == "status":
+                    if data["connected"]:
+                        if self.chat_status_label.winfo_exists():
+                            self.chat_status_label.configure(text=self._t("chat_connected"), text_color="green")
+                        
+                        # Show welcome message upon connection
+                        if not hasattr(self, '_welcome_shown'):
+                            self.chat_history.configure(state="normal")
+                            self.chat_history.insert("end", f"{self._t('chat_welcome')}\n", "system")
+                            self.chat_history.configure(state="disabled")
+                            self._welcome_shown = True
+                        
+                        # Initial count update if we already have it
+                        if self.chat_count_label.winfo_exists():
+                            self.chat_count_label.configure(text=self._t("chat_online_count").format(count=self.online_count))
+                    else:
+                        if self.chat_status_label.winfo_exists():
+                            self.chat_status_label.configure(text=self._t("chat_disconnected"), text_color="gray")
+                        if self.chat_count_label.winfo_exists():
+                            self.chat_count_label.configure(text="")
+                        
+                        # Try to reconnect after a delay
+                        self.after(5000, self.connect_chat)
+                
+                elif data["type"] == "user_count":
+                    self.online_count = data.get("count", 0)
+                    if self.chat_count_label.winfo_exists():
+                        self.chat_count_label.configure(text=self._t("chat_online_count").format(count=self.online_count))
+                
+                elif data["type"] == "history":
+                    self.chat_history.configure(state="normal")
+                    self.chat_history.delete("1.0", "end")
+                    for entry in data.get("messages", []):
+                        self._add_to_history_ui(entry)
+                    self.chat_history.configure(state="disabled")
+                
+                elif data["type"] == "chat":
+                    self.chat_history.configure(state="normal")
+                    self._add_to_history_ui(data)
+                    self.chat_history.configure(state="disabled")
+                
+                elif data["type"] == "system":
+                    self.chat_history.configure(state="normal")
+                    self._add_to_history_ui(data)
+                    self.chat_history.configure(state="disabled")
+
+        except Exception as e:
+            # Log error but don't stop the loop (e.g., if widget destroyed during update)
+            # print(f"Chat UI polling error: {e}")
+            pass
+        
+        # Poll again soon
+        self.after(100, self.receive_chat_messages)
+
+    def _add_to_history_ui(self, data):
+        """Helper to add a single message to the text box."""
+        msg_type = data.get("type", "chat")
+        time_str = data.get("time", datetime.now().strftime("%H:%M"))
+        
+        if not hasattr(self, 'created_color_tags'):
+            self.created_color_tags = set()
+            self.chat_history.tag_config("time", foreground="gray")
+            self.chat_history.tag_config("system", foreground="#888888")
+            self.chat_history.tag_config("tripcode", foreground="#555555")
+            # Tags are now ready
+        
+        if msg_type == "system":
+            sys_msg = data.get("message", "")
+            nick = data.get("nickname", "User")
+            text = self._t(f"chat_{sys_msg}").format(nickname=nick)
+            self.chat_history.insert("end", f"[{time_str}] {text}\n", "system")
+        else:
+            nick = data.get("nickname", "Unknown")
+            msg = data.get("message", "")
+            color = data.get("color", "#d4af37") # Fallback to gold
+            
+            # Unique tag name for this color
+            tag_name = f"color_{color.replace('#', '')}"
+            
+            if tag_name not in self.created_color_tags:
+                self.chat_history.tag_config(tag_name, foreground=color)
+                self.created_color_tags.add(tag_name)
+            
+            tripcode = data.get("tripcode", "")
+            
+            self.chat_history.insert("end", f"[{time_str}] ", "time")
+            self.chat_history.insert("end", f"{nick}", tag_name)
+            if tripcode:
+                self.chat_history.insert("end", f"({tripcode})", "tripcode")
+            self.chat_history.insert("end", ": ", tag_name)
+            self.chat_history.insert("end", f"{msg}\n", "msg")
+        
+        
+        self.chat_history.see("end")
+        
+        # Optimization: Prune old messages if they exceed 200 lines
+        try:
+            line_count = int(self.chat_history.index("end-1c").split(".")[0])
+            if line_count > 200:
+                # Delete first 50 lines to keep it smooth
+                self.chat_history.delete("1.0", "51.0")
+                self.chat_history.insert("1.0", "... (older messages pruned for performance) ...\n", "system")
+        except Exception as e:
+            print(f"Optimization error: {e}")
 
     def monitor_process(self):
         try:
