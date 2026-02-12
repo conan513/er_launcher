@@ -138,11 +138,18 @@ async def handle_client(websocket, path=None):
                     
                     IP_LAST_MESSAGE_TIME[ip] = now
                     
-                    # Get color for nickname
+                    # Refresh metadata on every message to ensure player list is accurate
                     color = get_nickname_color(nick)
+                    user_id = data.get("user_id", "anonymous")
+                    CLIENTS[websocket] = {
+                        "nickname": nick, 
+                        "modpack": data.get("modpack", CLIENTS[websocket]["modpack"]), 
+                        "in_game": data.get("in_game", CLIENTS[websocket]["in_game"]), 
+                        "game_mode": data.get("game_mode", CLIENTS[websocket]["game_mode"]), 
+                        "color": color
+                    }
                     
                     # Generate Tripcode if user_id is provided
-                    user_id = data.get("user_id", "anonymous")
                     tripcode = hashlib.sha256(user_id.encode()).hexdigest()[:4]
                     
                     # Store in history

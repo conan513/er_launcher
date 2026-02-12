@@ -60,7 +60,7 @@ def run_as_admin():
         return False
 
 class EldenRingLauncher(ctk.CTk):
-    VERSION = "1.1.1"
+    VERSION = "1.1.2"
     VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
 
@@ -125,7 +125,29 @@ class EldenRingLauncher(ctk.CTk):
             self.chat_user_id = str(uuid.uuid4())
             self.save_config_value("chat_user_id", self.chat_user_id)
             
+        # Default Nickname Logic
+        if not self.chat_nickname_var.get():
+            # Use last 4 chars of user_id for a unique-ish default name
+            suffix = self.chat_user_id[-4:] if len(self.chat_user_id) > 4 else "0000"
+            self.chat_nickname_var.set(f"Tarnished_{suffix}")
+            self.save_config_value("chat_nickname", self.chat_nickname_var.get())
+            
         self.show_chat = self.read_config_value("show_chat", "True") == "True"
+        
+        # Pin & Opacity Features
+        self.always_on_top_var = ctk.BooleanVar(value=self.read_config_value("always_on_top", "False") == "True")
+        # Do not apply topmost on startup; will be applied in set_lockdown if game is running
+        
+        opacity_val = float(self.read_config_value("ingame_opacity", "0.8"))
+        self.ingame_opacity_var = ctk.DoubleVar(value=opacity_val)
+        
+        # Window Position Persistence for Lockdown
+        self.lockdown_pos_x = self.read_config_value("lockdown_pos_x", "")
+        self.lockdown_pos_y = self.read_config_value("lockdown_pos_y", "")
+        self.bind("<Configure>", self.on_window_configure)
+        self.bind("<FocusIn>", self.on_focus_in)
+        self.bind("<FocusOut>", self.on_focus_out)
+        
         self.chat_queue = queue.Queue()
         self.chat_socket = None
         self.chat_thread = None
@@ -1061,6 +1083,7 @@ class EldenRingLauncher(ctk.CTk):
         self.scaling_menu.pack()
 
 
+
         # --- TOOLS TAB ---
         ctk.CTkButton(self.tab_tools, text=self._t("open_saves_folder"),
                       command=self.open_saves_folder,
@@ -1406,6 +1429,59 @@ class EldenRingLauncher(ctk.CTk):
         except Exception as e:
             print(f"Error applying real-time scaling: {e}")
 
+    def toggle_always_on_top(self):
+        is_on = self.always_on_top_var.get()
+        # Only apply immediately if currently in lockdown
+        if getattr(self, '_launcher_locked_state', False):
+            self.attributes("-topmost", is_on)
+        else:
+            self.attributes("-topmost", False)
+        self.save_config_value("always_on_top", str(is_on))
+
+    def toggle_always_on_top_btn(self):
+        new_val = not self.always_on_top_var.get()
+        self.always_on_top_var.set(new_val)
+        self.toggle_always_on_top()
+
+    def _update_pin_button_style(self):
+        if hasattr(self, 'pin_btn'):
+            if self.always_on_top_var.get():
+                self.pin_btn.configure(fg_color="#3e4a3d", text_color="white")
+            else:
+                self.pin_btn.configure(fg_color="transparent", text_color="#d4af37")
+
+    def on_opacity_change(self, value):
+        self.save_config_value("ingame_opacity", f"{value:.2f}")
+        # Apply immediately if currently in lockdown
+        if getattr(self, '_launcher_locked_state', False):
+            self.attributes("-alpha", value)
+
+    def on_window_configure(self, event):
+        """Save window position if moved during lockdown."""
+        if getattr(self, '_launcher_locked_state', False):
+            # Only save if the window is currently 340x550 (sidebar width) 
+            # and focused/active to avoid saving mid-resize values
+            if self.winfo_width() > 300 and self.winfo_width() < 400:
+                x = self.winfo_x()
+                y = self.winfo_y()
+                # Use string comparison as config values are loaded as strings
+                if str(x) != str(self.lockdown_pos_x) or str(y) != str(self.lockdown_pos_y):
+                    self.lockdown_pos_x = x
+                    self.save_config_value("lockdown_pos_x", str(x))
+                    self.lockdown_pos_y = y
+                    self.save_config_value("lockdown_pos_y", str(y))
+
+    def on_focus_in(self, event):
+        """Increase opacity when window is focused during gameplay."""
+        if getattr(self, '_launcher_locked_state', False):
+            # Use 0.95 for a solid but slightly soft look
+            self.attributes("-alpha", 0.95)
+
+    def on_focus_out(self, event):
+        """Restore translucency when window loses focus during gameplay."""
+        if getattr(self, '_launcher_locked_state', False):
+            self.attributes("-alpha", self.ingame_opacity_var.get())
+
     def setup_chat_sidebar(self, parent):
         """Setup the UI for the Global Chat Sidebar."""
         
@@ -1420,6 +1496,12 @@ class EldenRingLauncher(ctk.CTk):
         ctk.CTkLabel(header_frame, text=self._t("chat_nickname_label"), font=("Arial", 11, "bold")).pack(side="left", padx=5)
         self.chat_status_label = ctk.CTkLabel(header_frame, text=self._t("chat_disconnected"), font=("Arial", 10), text_color="gray")
         self.chat_status_label.pack(side="right", padx=10)
+
+        # Lockdown Notice (hidden by default, shown during game)
+        self.chat_lockdown_notice = ctk.CTkLabel(parent, text=self._t("lockdown_message"), 
+                                                 font=("Arial", 10, "bold"), text_color="#e15f41",
+                                                 fg_color="#1a1a1a", corner_radius=5)
+        # Not packed yet
 
         self.chat_nick_entry = tk.Entry(parent, textvariable=self.chat_nickname_var,
                                         bg="#1a1a1a", fg="white", insertbackground="white", 
@@ -1451,6 +1533,32 @@ class EldenRingLauncher(ctk.CTk):
             except Exception as e:
                 print(f"Error requesting history: {e}")
         
+        # --- Sidebar Settings (Always on Top & Opacity) ---
+        sidebar_settings_frame = ctk.CTkFrame(parent, fg_color="#111111", corner_radius=5)
+        sidebar_settings_frame.pack(fill="x", padx=10, pady=(5, 5))
+        
+        # Top Row: Always on Top
+        pin_cb = ctk.CTkCheckBox(sidebar_settings_frame, text=self._t("settings_always_on_top"),
+                                 variable=self.always_on_top_var,
+                                 command=self.toggle_always_on_top,
+                                 font=("Arial", 10, "bold"), text_color="#d4af37",
+                                 fg_color="#3e4a3d", hover_color="#4e5b4d",
+                                 checkbox_width=18, checkbox_height=18)
+        pin_cb.pack(side="left", padx=10, pady=5)
+        
+        # Opacity Slider (Compact)
+        op_frame = ctk.CTkFrame(sidebar_settings_frame, fg_color="transparent")
+        op_frame.pack(side="right", padx=10, fill="x", expand=True)
+        
+        self.opacity_slider = ctk.CTkSlider(op_frame, from_=0.2, to=1.0, 
+                                            variable=self.ingame_opacity_var,
+                                            command=self.on_opacity_change,
+                                            height=16,
+                                            button_color="#d4af37", button_hover_color="#b48f17")
+        self.opacity_slider.pack(side="right", padx=(5, 0))
+        
+        ctk.CTkLabel(op_frame, text="🌗", font=("Arial", 10)).pack(side="right")
+
         # Bottom Frame for Input
         input_frame = ctk.CTkFrame(parent, fg_color="transparent")
         input_frame.pack(fill="x", padx=10, pady=(0, 5))
@@ -1833,14 +1941,18 @@ class EldenRingLauncher(ctk.CTk):
                                 self.player_list_box.tag_config(tag_name, foreground=color)
                                 self.plist_tags.add(tag_name)
                             
-                            # Status Text
+                            # Status Text (Compact Format)
                             if in_game:
-                                status_key = "status_ingame"
+                                # Abbreviate mod names
+                                short_mod = mod
+                                if mod == "Quality of Life": short_mod = "QoL"
+                                elif mod == "Diablo Loot (RNG)": short_mod = "Diablo"
+                                
                                 mode_key = "mode_seamless" if mode == "Seamless" else "mode_online"
-                                info_text = f" ({mod}) [{self._t(status_key)} - {self._t(mode_key)}]"
+                                info_text = f" ({short_mod} - {self._t(mode_key)})"
                             else:
-                                status_key = "status_launcher"
-                                info_text = f" [{self._t(status_key)}]"
+                                status_text = self._t("status_launcher")
+                                info_text = f" [{status_text}]"
                             
                             self.player_list_box.insert("end", f"• {nick}", tag_name)
                             self.player_list_box.insert("end", f"{info_text}\n")
@@ -2436,41 +2548,94 @@ class EldenRingLauncher(ctk.CTk):
             self.show_bootstrap_ui(self.game_dir)
 
     def set_lockdown(self, locked):
-        """Show or hide the lockdown overlay when the game is running."""
+        """Resize window to show only chat when game is running."""
+        # Use a state variable to prevent repeated resizing
+        if hasattr(self, '_launcher_locked_state') and self._launcher_locked_state == locked:
+            return
+            
+        self._launcher_locked_state = locked
+        
         if locked:
-            # Determine the best master (content_frame is preferred, but fallback to self)
-            target_master = getattr(self, 'content_frame', self) if hasattr(self, 'content_frame') else self
+            print("Game running: Entering Chat-Only Lockdown mode.")
+            # Hide the main content frame
+            if hasattr(self, 'content_frame'):
+                self.content_frame.place_forget()
             
-            # If we have a lockdown_frame but the master is wrong, destroy it to recreate
-            if self.lockdown_frame and self.lockdown_frame.master != target_master:
-                self.lockdown_frame.destroy()
-                self.lockdown_frame = None
-
-            if not self.lockdown_frame:
-                # Create frame on the target master (usually content_frame) to cover only that area
-                self.lockdown_frame = ctk.CTkFrame(target_master, fg_color="#0f0f0f", corner_radius=15 if target_master != self else 0)
-                self.lockdown_status = ctk.CTkLabel(self.lockdown_frame, text=self._t("lockdown_message"), 
-                                                   font=("Cinzel", 18, "bold"), text_color="#d4af37", wraplength=400)
-                self.lockdown_status.place(relx=0.5, rely=0.5, anchor="center")
-            
-            self.lockdown_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
-            self.lockdown_frame.lift() # Ensure it's on top of other content in the same frame
+            # Show and expand sidebar frame to fill the window
+            if hasattr(self, 'sidebar_frame'):
+                # Resize window to sidebar width
+                if self.lockdown_pos_x and self.lockdown_pos_y:
+                    try:
+                        self.geometry(f"340x550+{self.lockdown_pos_x}+{self.lockdown_pos_y}")
+                    except:
+                        self.geometry("340x550")
+                        self.center_window(340, 550)
+                else:
+                    self.geometry("340x550")
+                    self.center_window(340, 550)
+                
+                # Fill entire window in lockdown
+                self.sidebar_frame.place(relx=0.0, rely=0.0, relwidth=1.0, relheight=1.0)
+                
+                # Update: Show lockdown notice in chat
+                if hasattr(self, 'chat_lockdown_notice'):
+                    self.chat_lockdown_notice.pack(fill="x", padx=15, pady=(2, 5), before=self.chat_nick_entry)
+                
+                # Apply Opacity
+                self.attributes("-alpha", self.ingame_opacity_var.get())
+                
+                # Apply Always on Top
+                if self.always_on_top_var.get():
+                    self.attributes("-topmost", True)
         else:
-            if self.lockdown_frame:
-                self.lockdown_frame.place_forget()
+            print("Game stopped: Restoring Full View.")
+            # Restore Opacity & Pin
+            self.attributes("-alpha", 1.0)
+            self.attributes("-topmost", False)
+            
+            # Update: Hide lockdown notice in chat
+            if hasattr(self, 'chat_lockdown_notice'):
+                self.chat_lockdown_notice.pack_forget()
+
+            # Restore window size and frames based on normal chat visibility
+            if self.show_chat:
+                self.geometry("1000x550")
+                if hasattr(self, 'content_frame'):
+                    self.content_frame.place(relx=0.02, rely=0.05, relwidth=0.64, relheight=0.9)
+                if hasattr(self, 'sidebar_frame'):
+                    self.sidebar_frame.place(relx=0.68, rely=0.05, relwidth=0.30, relheight=0.9)
+                self.center_window(1000, 550)
+            else:
+                self.geometry("660x550")
+                if hasattr(self, 'sidebar_frame'):
+                    self.sidebar_frame.place_forget()
+                if hasattr(self, 'content_frame'):
+                    self.content_frame.place(relx=0.05, rely=0.05, relwidth=0.9, relheight=0.9)
+                self.center_window(660, 550)
 
     def check_for_updates(self):
-        """Check for updates in a background thread."""
+        """Check for updates in a background thread with cache-busting."""
         def check():
             try:
-                # Fetch remote version
-                with urllib.request.urlopen(self.VERSION_URL) as response:
-                    remote_version = response.read().decode('utf-8').strip()
+                # Cache-busting: add timestamp to URL
+                url = f"{self.VERSION_URL}?t={int(time.time())}"
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ERLauncher'})
                 
-                print(f"Local Version: {self.VERSION}, Remote Version: {remote_version}")
+                with urllib.request.urlopen(req) as response:
+                    remote_version = response.read().decode('utf-8-sig').strip() # Use utf-8-sig to handle BOM
                 
-                if remote_version != self.VERSION:
+                # Further sanitize: remove any non-printable chars
+                remote_version = "".join(c for c in remote_version if c.isprintable()).strip()
+                
+                print(f"Local Version: '{self.VERSION}', Remote Version: '{remote_version}'")
+                
+                if remote_version and remote_version != self.VERSION:
+                    print("Update available!")
                     self.after(0, lambda: self.show_update_available(remote_version))
+                else:
+                    # Ensure update button is hidden if versions match (e.g. after update)
+                    if hasattr(self, 'update_btn'):
+                        self.after(0, lambda: self.update_btn.pack_forget())
                     
             except Exception as e:
                 print(f"Update check failed: {e}")
@@ -2496,42 +2661,54 @@ class EldenRingLauncher(ctk.CTk):
             self.update_btn.configure(fg_color="#e15f41", hover_color="#c44569")
 
     def perform_update(self):
-        """Download new version and restart using a batch script."""
+        """Handle update process in a background thread."""
+        self.update_btn.configure(text="Downloading...", state="disabled")
+        threading.Thread(target=self._run_update_task, daemon=True).start()
+
+    def _run_update_task(self):
+        """Background task for downloading and preparing the update script."""
         try:
-            print("Downloading update...")
-            self.update_btn.configure(text="Downloading...", state="disabled")
+            print(f"Downloading update from {self.UPDATE_URL}...")
             
-            # dynamic update name
+            # Use request with User-Agent to avoid blocks
+            req = urllib.request.Request(self.UPDATE_URL, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ERLauncher'})
             new_exe = "ER_Launcher_new.exe"
-            urllib.request.urlretrieve(self.UPDATE_URL, new_exe)
+            
+            with urllib.request.urlopen(req) as response:
+                with open(new_exe, 'wb') as f:
+                    f.write(response.read())
             
             print("Download complete. Preparing update script...")
             
             # Create update batch script
             bat_script = """
 @echo off
+setlocal
 timeout /t 3 /nobreak > nul
-del "ER_Launcher.exe"
-move "ER_Launcher_new.exe" "ER_Launcher.exe"
-set _MEIPASS2=
-set PYTHONPATH=
-start "" "ER_Launcher.exe"
+if exist "ER_Launcher_new.exe" (
+    if exist "ER_Launcher.exe" del /f /q "ER_Launcher.exe"
+    move /y "ER_Launcher_new.exe" "ER_Launcher.exe"
+    start "" "ER_Launcher.exe"
+)
 del "%~f0"
 """
             with open("update.bat", "w") as f:
                 f.write(bat_script)
                 
             # Launch script and exit safely
-            # Use CREATE_NEW_CONSOLE to ensure it lives on
             subprocess.Popen("update.bat", shell=True, creationflags=subprocess.CREATE_NEW_CONSOLE)
             
-            # Use os._exit to bypass cleanup handlers that might crash
+            # Exit launcher
             self.after(100, lambda: os._exit(0))
             
         except Exception as e:
             print(f"Update failed: {e}")
-            self.update_btn.configure(text="Update Failed!", fg_color="red")
-            self.after(3000, lambda: self.update_btn.configure(text=f"Update Available!", state="normal"))
+            self.after(0, lambda: self._handle_update_failure(str(e)))
+
+    def _handle_update_failure(self, error):
+        self.update_btn.configure(text="Update Failed!", fg_color="red", state="normal")
+        self.after(3000, lambda: self.update_btn.configure(text=self._t("update_available_btn"), fg_color="#e15f41"))
+        print(f"Detailed Error: {error}")
 
 if __name__ == "__main__":
     app = EldenRingLauncher()
