@@ -60,7 +60,7 @@ def run_as_admin():
         return False
 
 class EldenRingLauncher(ctk.CTk):
-    VERSION = "1.1.0"
+    VERSION = "1.1.1"
     VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
 
@@ -107,6 +107,7 @@ class EldenRingLauncher(ctk.CTk):
         self.lang_var = ctk.StringVar(value=saved_lang)
         
         self.game_active = False
+        self.last_game_mode = "Online"
         
         # QoL Mod Toggles (default all enabled)
         self.qol_questlog_var = ctk.BooleanVar(value=self.read_config_value("qol_questlog_enabled", "True") == "True")
@@ -1412,23 +1413,36 @@ class EldenRingLauncher(ctk.CTk):
         if hasattr(self, 'created_color_tags'):
             del self.created_color_tags
 
-        # Top Frame for Nickname
-        nick_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        nick_frame.pack(fill="x", padx=10, pady=5)
+        # Top Frame for Nickname & Status (Side-by-side for space)
+        header_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        header_frame.pack(fill="x", padx=10, pady=(5, 2))
         
-        ctk.CTkLabel(nick_frame, text=self._t("chat_nickname_label"), font=("Arial", 11, "bold")).pack(side="top", anchor="w", padx=5)
-        self.chat_nick_entry = tk.Entry(nick_frame, textvariable=self.chat_nickname_var,
+        ctk.CTkLabel(header_frame, text=self._t("chat_nickname_label"), font=("Arial", 11, "bold")).pack(side="left", padx=5)
+        self.chat_status_label = ctk.CTkLabel(header_frame, text=self._t("chat_disconnected"), font=("Arial", 10), text_color="gray")
+        self.chat_status_label.pack(side="right", padx=10)
+
+        self.chat_nick_entry = tk.Entry(parent, textvariable=self.chat_nickname_var,
                                         bg="#1a1a1a", fg="white", insertbackground="white", 
                                         relief="flat", font=("Arial", 12))
-        self.chat_nick_entry.pack(fill="x", padx=5, pady=(2, 5), ipady=3)
-        self.chat_nick_entry.bind("<FocusOut>", lambda e: self.save_config_value("chat_nickname", self.chat_nickname_var.get()))
+        self.chat_nick_entry.pack(fill="x", padx=15, pady=(0, 5), ipady=2)
         
-        self.chat_status_label = ctk.CTkLabel(nick_frame, text=self._t("chat_disconnected"), font=("Arial", 10), text_color="gray")
-        self.chat_status_label.pack(side="top", anchor="e", padx=10)
+        def on_nick_focus_out(e):
+            nick = self.chat_nickname_var.get().strip() or "Unknown"
+            self.save_config_value("chat_nickname", nick)
+            if hasattr(self, 'send_queue') and self.chat_socket:
+                self.broadcast_status()
+        self.chat_nick_entry.bind("<FocusOut>", on_nick_focus_out)
+
+        # Online Players List (More compact)
+        self.player_list_label = ctk.CTkLabel(parent, text=self._t("chat_online_players"), font=("Arial", 10, "bold"), text_color="#d4af37")
+        self.player_list_label.pack(side="top", anchor="w", padx=15, pady=(2, 0))
+        
+        self.player_list_box = ctk.CTkTextbox(parent, height=60, state="disabled", wrap="word", font=("Segoe UI Emoji", 10), fg_color="#0d0d0d", border_width=1, border_color="#333333")
+        self.player_list_box.pack(fill="x", padx=10, pady=(2, 5))
 
         # Chat History
         self.chat_history = ctk.CTkTextbox(parent, state="disabled", wrap="word", font=("Segoe UI Emoji", 11), fg_color="#0d0d0d")
-        self.chat_history.pack(fill="both", expand=True, padx=10, pady=5)
+        self.chat_history.pack(fill="both", expand=True, padx=10, pady=(2, 5))
         
         # Request full history from server if we are reconnecting UI
         if self.chat_socket and hasattr(self, 'send_queue'):
@@ -1439,38 +1453,35 @@ class EldenRingLauncher(ctk.CTk):
         
         # Bottom Frame for Input
         input_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        input_frame.pack(fill="x", padx=10, pady=(0, 10))
+        input_frame.pack(fill="x", padx=10, pady=(0, 5))
         
         # Input field with Emoji button
         input_sub_frame = ctk.CTkFrame(input_frame, fg_color="transparent")
-        input_sub_frame.pack(fill="x", pady=(0, 5))
+        input_sub_frame.pack(fill="x", pady=(0, 2))
         
         self.chat_input = tk.Entry(input_sub_frame, bg="#1a1a1a", fg="white", 
                                    insertbackground="white", font=("Segoe UI Emoji", 11),
                                    bd=1, relief="solid", highlightthickness=1, 
                                    highlightbackground="#d4af37", highlightcolor="#d4af37")
-        self.chat_input.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=5) # ipady for height
+        self.chat_input.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=3) # Reduced ipady
         self.chat_input.bind("<Return>", lambda e: self.send_chat_message())
         self.chat_input.bind("<KeyRelease>", self.check_emoji_shortcuts)
         self.chat_input.bind("<BackSpace>", self.on_chat_backspace)
         
-        # Emoji Picker logic (Hybrid: Built-in + System Hint)
+        # Emoji Picker
         self.emoji_list = [
             "😀", "😂", "🤣", "😊", "😍", "🤔", "🙄", "📢", "⚔️", "🛡️", "🔥", "✨", 
             "💀", "👍", "👎", "🎉", "❤️", "💔", "🌟", "👀", "👋", "🙌", "👑", "💪",
             "⚡", "🎮", "🗡️", "🏹", "🧪", "🧙", "👹", "🏆"
         ]
-        self.emoji_btn = ctk.CTkButton(input_sub_frame, text="😀", width=35, height=35, 
+        self.emoji_btn = ctk.CTkButton(input_sub_frame, text="😀", width=35, height=32, # Reduced height
                                        fg_color="#1a1a1a", border_width=1, border_color="#d4af37",
                                        command=self.show_emoji_menu)
         self.emoji_btn.pack(side="right")
         
-        self.chat_send_btn = ctk.CTkButton(input_frame, text=self._t("chat_send_btn"), height=35, 
+        self.chat_send_btn = ctk.CTkButton(input_frame, text=self._t("chat_send_btn"), height=32, # Reduced height
                                            command=self.send_chat_message, fg_color="#3e4a3d", hover_color="#4e5b4d")
         self.chat_send_btn.pack(fill="x")
-        
-        self.chat_count_label = ctk.CTkLabel(input_frame, text="", font=("Arial", 10), text_color="#aaaaaa")
-        self.chat_count_label.pack(side="top", pady=(5, 0))
         
         # Start connection process if not already running
         if not self.chat_thread or not self.chat_thread.is_alive():
@@ -1480,7 +1491,7 @@ class EldenRingLauncher(ctk.CTk):
         elif self.chat_socket:
              self.chat_status_label.configure(text=self._t("chat_connected"), text_color="green")
              if hasattr(self, 'online_count'):
-                 self.chat_count_label.configure(text=self._t("chat_online_count").format(count=self.online_count))
+                 self.player_list_label.configure(text=f"{self._t('chat_online_players')} ({self.online_count})")
         
         if not hasattr(self, '_chat_polling_started'):
             self.receive_chat_messages()
@@ -1776,22 +1787,65 @@ class EldenRingLauncher(ctk.CTk):
                             self._welcome_shown = True
                         
                         # Initial count update if we already have it
-                        if self.chat_count_label.winfo_exists():
-                            self.chat_count_label.configure(text=self._t("chat_online_count").format(count=self.online_count))
+                        if self.player_list_label.winfo_exists():
+                            self.player_list_label.configure(text=f"{self._t('chat_online_players')} ({self.online_count})")
+
+                        # Send initial status update immediately after connection
+                        self.broadcast_status()
+                        
+                        # Also request history
+                        if hasattr(self, 'send_queue'):
+                            self.send_queue.put(json.dumps({"type": "request_history"}))
+
                     else:
                         if self.chat_status_label.winfo_exists():
                             self.chat_status_label.configure(text=self._t("chat_disconnected"), text_color="gray")
-                        if self.chat_count_label.winfo_exists():
-                            self.chat_count_label.configure(text="")
+                        if self.player_list_label.winfo_exists():
+                            self.player_list_label.configure(text=self._t("chat_online_players"))
                         
                         # Try to reconnect after a delay
                         self.after(5000, self.connect_chat)
                 
                 elif data["type"] == "user_count":
                     self.online_count = data.get("count", 0)
-                    if self.chat_count_label.winfo_exists():
-                        self.chat_count_label.configure(text=self._t("chat_online_count").format(count=self.online_count))
+                    if self.player_list_label.winfo_exists():
+                        self.player_list_label.configure(text=f"{self._t('chat_online_players')} ({self.online_count})")
                 
+                elif data["type"] == "player_list":
+                    if hasattr(self, 'player_list_box') and self.player_list_box.winfo_exists():
+                        self.player_list_box.configure(state="normal")
+                        self.player_list_box.delete("1.0", "end")
+                        for p in data.get("players", []):
+                            nick = p.get("nickname", "Unknown")
+                            mod = p.get("modpack", "Vanilla")
+                            in_game = p.get("in_game", False)
+                            mode = p.get("game_mode", "Online")
+                            color = p.get("color", "gray")
+                            
+                            # Use a clean tag name for color
+                            clean_color = color.replace("#", "")
+                            tag_name = f"plist_{clean_color}"
+                            
+                            if not hasattr(self, 'plist_tags'):
+                                self.plist_tags = set()
+                            
+                            if tag_name not in self.plist_tags:
+                                self.player_list_box.tag_config(tag_name, foreground=color)
+                                self.plist_tags.add(tag_name)
+                            
+                            # Status Text
+                            if in_game:
+                                status_key = "status_ingame"
+                                mode_key = "mode_seamless" if mode == "Seamless" else "mode_online"
+                                info_text = f" ({mod}) [{self._t(status_key)} - {self._t(mode_key)}]"
+                            else:
+                                status_key = "status_launcher"
+                                info_text = f" [{self._t(status_key)}]"
+                            
+                            self.player_list_box.insert("end", f"• {nick}", tag_name)
+                            self.player_list_box.insert("end", f"{info_text}\n")
+                        self.player_list_box.configure(state="disabled")
+
                 elif data["type"] == "history":
                     self.chat_history.configure(state="normal")
                     self.chat_history.delete("1.0", "end")
@@ -1877,11 +1931,14 @@ class EldenRingLauncher(ctk.CTk):
             
             if is_running:
                 self.update_status(self._t("now_running"), "#44ff44")
-                self.game_active = True
+                if not getattr(self, 'game_active', False):
+                    self.game_active = True
+                    self.broadcast_status() # Game just started
                 self.launch_start_time = 0 # Reset on successful launch
             else:
-                if hasattr(self, 'game_active') and self.game_active:
+                if getattr(self, 'game_active', False):
                     self.game_active = False
+                    self.broadcast_status() # Game just stopped
 
                 # Status Reset Logic:
                 # If we are in "Launching" state (launch_start_time > 0)
@@ -2046,6 +2103,17 @@ class EldenRingLauncher(ctk.CTk):
             
         # Sync settings regardless of whether we applied the modpack (e.g. if game running)
         self.sync_modpack_settings()
+
+        # Send status update to chat server if connected
+        if hasattr(self, 'send_queue') and self.chat_socket:
+            nick = self.chat_nickname_var.get().strip() or "Unknown"
+            self.send_queue.put(json.dumps({
+                "type": "status_update",
+                "nickname": nick,
+                "modpack": internal_key,
+                "in_game": self.is_game_running(),
+                "game_mode": getattr(self, 'last_game_mode', "Online")
+            }, ensure_ascii=False))
 
     def apply_modpack(self, pack_name):
         if not self.game_dir or not os.path.exists(self.game_dir):
@@ -2293,6 +2361,31 @@ class EldenRingLauncher(ctk.CTk):
             return False
 
 
+    def broadcast_status(self):
+        """Send a status update to the chat server."""
+        if not hasattr(self, 'send_queue') or not self.chat_socket:
+            return
+            
+        try:
+            nick = self.chat_nickname_var.get().strip() or "Unknown"
+            
+            # Get current modpack internal key
+            val = self.modpack_var.get()
+            internal_key = "Vanilla"
+            if val == self._t("qol"): internal_key = "Quality of Life"
+            elif val == self._t("diablo"): internal_key = "Diablo Loot (RNG)"
+            
+            payload = json.dumps({
+                "type": "status_update",
+                "nickname": nick,
+                "modpack": internal_key,
+                "in_game": self.is_game_running(),
+                "game_mode": getattr(self, 'last_game_mode', "Online")
+            }, ensure_ascii=False)
+            self.send_queue.put(payload)
+        except Exception as e:
+            print(f"Error broadcasting status: {e}")
+
     def launch_seamless(self):
         if self.is_game_running():
             self.update_status(self._t("running"), "#ff4444")
@@ -2305,8 +2398,10 @@ class EldenRingLauncher(ctk.CTk):
         if not self.toggle_dlls("seamless"): return
         if os.path.exists(self.launch_exe):
             self.update_status(self._t("launch_seamless"), "#d4af37")
+            self.last_game_mode = "Seamless"
             subprocess.Popen([self.launch_exe], cwd=self.game_dir)
             self.launch_start_time = time.time()
+            self.broadcast_status()
             
         else:
             self.update_status(self._t("exe_not_found"), "#ff4444")
@@ -2322,8 +2417,10 @@ class EldenRingLauncher(ctk.CTk):
         if not self.toggle_dlls("online"): return
         if os.path.exists(self.launch_exe):
             self.update_status(self._t("launch_online"), "#d4af37")
+            self.last_game_mode = "Online"
             subprocess.Popen([self.launch_exe], cwd=self.game_dir)
             self.launch_start_time = time.time()
+            self.broadcast_status()
 
         else:
             self.update_status(self._t("exe_not_found"), "#ff4444")
@@ -2341,15 +2438,23 @@ class EldenRingLauncher(ctk.CTk):
     def set_lockdown(self, locked):
         """Show or hide the lockdown overlay when the game is running."""
         if locked:
+            # Determine the best master (content_frame is preferred, but fallback to self)
+            target_master = getattr(self, 'content_frame', self) if hasattr(self, 'content_frame') else self
+            
+            # If we have a lockdown_frame but the master is wrong, destroy it to recreate
+            if self.lockdown_frame and self.lockdown_frame.master != target_master:
+                self.lockdown_frame.destroy()
+                self.lockdown_frame = None
+
             if not self.lockdown_frame:
-                # Create frame on the main window (self) to cover everything
-                self.lockdown_frame = ctk.CTkFrame(self, fg_color="#0f0f0f", corner_radius=0)
+                # Create frame on the target master (usually content_frame) to cover only that area
+                self.lockdown_frame = ctk.CTkFrame(target_master, fg_color="#0f0f0f", corner_radius=15 if target_master != self else 0)
                 self.lockdown_status = ctk.CTkLabel(self.lockdown_frame, text=self._t("lockdown_message"), 
                                                    font=("Cinzel", 18, "bold"), text_color="#d4af37", wraplength=400)
                 self.lockdown_status.place(relx=0.5, rely=0.5, anchor="center")
             
             self.lockdown_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
-            self.lockdown_frame.lift() # Ensure it's on top
+            self.lockdown_frame.lift() # Ensure it's on top of other content in the same frame
         else:
             if self.lockdown_frame:
                 self.lockdown_frame.place_forget()

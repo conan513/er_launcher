@@ -8,7 +8,7 @@ import hashlib
 
 logging.basicConfig(level=logging.INFO)
 
-CLIENTS = set()
+CLIENTS = {} # websocket: {"nickname": "Unknown", "modpack": "Vanilla", "color": "#gray"}
 CHAT_HISTORY = []
 MAX_HISTORY = 100
 LOG_FILE = "chat_log.json"
@@ -63,15 +63,34 @@ def load_chat_history():
 
 async def broadcast(message):
     if CLIENTS:
-        await asyncio.gather(*(client.send(message) for client in CLIENTS), return_exceptions=True)
+        await asyncio.gather(*(client.send(message) for client in CLIENTS.keys()), return_exceptions=True)
+
+async def broadcast_player_list():
+    players = []
+    for meta in CLIENTS.values():
+        players.append({
+            "nickname": meta["nickname"],
+            "modpack": meta["modpack"],
+            "in_game": meta.get("in_game", False),
+            "game_mode": meta.get("game_mode", "Online"),
+            "color": meta["color"]
+        })
+    await broadcast(json.dumps({"type": "player_list", "players": players}, ensure_ascii=False))
 
 async def handle_client(websocket, path=None):
     ip = websocket.remote_address[0]
     logging.info(f"New client connected: {ip}")
-    CLIENTS.add(websocket)
+    CLIENTS[websocket] = {
+        "nickname": "Unknown", 
+        "modpack": "Vanilla", 
+        "in_game": False, 
+        "game_mode": "Online", 
+        "color": "gray"
+    }
     
-    # Broadcast new user count
+    # Broadcast new user count and list
     await broadcast(json.dumps({"type": "user_count", "count": len(CLIENTS)}, ensure_ascii=False))
+    await broadcast_player_list()
     
     # Send history to new client
     if CHAT_HISTORY:
@@ -79,18 +98,32 @@ async def handle_client(websocket, path=None):
         await websocket.send(history_payload)
         
     first_message = True
-    nick = "Unknown"
     
     try:
         async for message in websocket:
             try:
                 data = json.loads(message)
-                if data.get("type") == "chat":
+                
+                if data.get("type") == "status_update":
+                    nick = data.get("nickname", "Unknown")
+                    mod = data.get("modpack", "Vanilla")
+                    in_game = data.get("in_game", False)
+                    game_mode = data.get("game_mode", "Online")
+                    color = get_nickname_color(nick)
+                    CLIENTS[websocket] = {
+                        "nickname": nick, 
+                        "modpack": mod, 
+                        "in_game": in_game, 
+                        "game_mode": game_mode, 
+                        "color": color
+                    }
+                    await broadcast_player_list()
+
+                elif data.get("type") == "chat":
                     msg_text = data.get("message", "")
                     nick = data.get("nickname", "Unknown")
                     
                     if first_message:
-                        # Join notification removed as per user request
                         first_message = False
                     
                     # 1. Length Limit
@@ -141,12 +174,12 @@ async def handle_client(websocket, path=None):
     except websockets.exceptions.ConnectionClosed:
         logging.info(f"Client disconnected: {ip}")
     finally:
-        CLIENTS.remove(websocket)
-        # Leave notification removed as per user request
-        pass
+        if websocket in CLIENTS:
+            del CLIENTS[websocket]
             
-        # Broadcast updated user count
+        # Broadcast updated user count and list
         await broadcast(json.dumps({"type": "user_count", "count": len(CLIENTS)}, ensure_ascii=False))
+        await broadcast_player_list()
 
 # Load history on module load
 load_chat_history()
