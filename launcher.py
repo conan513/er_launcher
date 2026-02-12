@@ -174,6 +174,29 @@ class EldenRingLauncher(ctk.CTk):
         # Check for administrative privileges if game is in Program Files
         self.after(1000, self.check_admin_status)
 
+        self.emoji_shortcuts = {
+            ":)": "🙂", ":-)": "🙂", ":smile:": "🙂",
+            ":D": "😂", ":-D": "😂", ":grin:": "😁",
+            "<3": "❤️", ":heart:": "❤️",
+            ":(": "☹️", ":-(": "☹️", ":sad:": "😢",
+            ":thumbsup:": "👍", ":+1:": "👍",
+            ":ok:": "👌",
+            ":fire:": "🔥",
+            ":skull:": "💀",
+            ":check:": "✅",
+            ":x:": "❌",
+            ":wave:": "👋",
+            ":eyes:": "👀",
+            ":star:": "🌟",
+            ":100:": "💯",
+            ":cry:": "😭",
+            ":cool:": "😎",
+            ":wink:": "😉", ";)": "😉", ";-)": "😉",
+            ":thinking:": "🤔",
+            ":love:": "😍",
+            ":lol:": "🤣"
+        }
+        
     def center_window(self, width, height):
         self.update_idletasks()
         # Get screen dimensions
@@ -1428,6 +1451,8 @@ class EldenRingLauncher(ctk.CTk):
                                    highlightbackground="#d4af37", highlightcolor="#d4af37")
         self.chat_input.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=5) # ipady for height
         self.chat_input.bind("<Return>", lambda e: self.send_chat_message())
+        self.chat_input.bind("<KeyRelease>", self.check_emoji_shortcuts)
+        self.chat_input.bind("<BackSpace>", self.on_chat_backspace)
         
         # Emoji Picker logic (Hybrid: Built-in + System Hint)
         self.emoji_list = [
@@ -1568,6 +1593,65 @@ class EldenRingLauncher(ctk.CTk):
         self.chat_input.insert(0, current + emoji)
         self.emoji_popup.destroy()
         self.chat_input.focus_set() # Crucial for system integration
+
+    def check_emoji_shortcuts(self, event=None):
+        """Check if the last typed characters match an emoji shortcut."""
+        if not hasattr(self, 'chat_input') or not self.chat_input.winfo_exists():
+            return
+
+        # Get current text and cursor position
+        text = self.chat_input.get()
+        try:
+            cursor_pos = self.chat_input.index(tk.INSERT)
+        except:
+            return
+        
+        # We only care about text up to the cursor
+        current_text = text[:cursor_pos]
+        
+        # Iterate over shortcuts
+        for shortcut, emoji in self.emoji_shortcuts.items():
+            if current_text.endswith(shortcut):
+                # Calculate start position of the shortcut
+                start_pos = cursor_pos - len(shortcut)
+                
+                # Delete shortcut
+                self.chat_input.delete(start_pos, cursor_pos)
+                
+                # Insert emoji
+                self.chat_input.insert(start_pos, emoji)
+                
+                # Stop after one replacement to avoid conflicts
+                return
+
+    def on_chat_backspace(self, event):
+        """Handle backspace to correctly delete surrogate pairs (emojis)."""
+        if not hasattr(self, 'chat_input') or not self.chat_input.winfo_exists():
+            return
+            
+        if self.chat_input.selection_present(): 
+            return
+        
+        try:
+            cursor_pos = self.chat_input.index(tk.INSERT)
+            if cursor_pos == 0: return
+            
+            text = self.chat_input.get()
+            current_tk_pos = 0
+            
+            for char in text:
+                char_len = 2 if ord(char) > 0xFFFF else 1
+                next_tk_pos = current_tk_pos + char_len
+                
+                if next_tk_pos == cursor_pos:
+                    if char_len > 1:
+                        self.chat_input.delete(current_tk_pos, next_tk_pos)
+                        return "break"
+                    return # Normal char, let default handle it
+                
+                current_tk_pos = next_tk_pos
+        except Exception as e:
+            print(f"Backspace error: {e}")
 
     def connect_chat(self):
         """Start the background thread for WebSocket connection."""
@@ -2291,7 +2375,7 @@ class EldenRingLauncher(ctk.CTk):
     def show_update_available(self, new_version):
         """Show the update button in the UI."""
         if hasattr(self, 'update_btn'):
-            self.update_btn.configure(text=f"Update Available! (v{new_version})")
+            self.update_btn.configure(text=self._t("update_available_btn"))
             
             # Pack into the footer (above status label)
             # Since status_label is packed side="bottom", packing update_btn side="top" or "bottom" works.

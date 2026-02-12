@@ -113,6 +113,7 @@ TRANSLATIONS = {
         "about_discord": "Sluit aan by ons Discord",
         "about_paypal": "Skenk via PayPal",
         "about_patreon": "Ondersteun op Patreon",
+        "update_available_btn": "Update Available!",
     },
     "ar": {
         "admin_required": "امتيازات المسؤول مطلوبة.",
@@ -227,6 +228,7 @@ TRANSLATIONS = {
         "about_discord": "انضم إلى الديسكورد الخاص بنا",
         "about_paypal": "تبرع عبر PayPal",
         "about_patreon": "ادعمنا على Patreon",
+        "update_available_btn": "Update Available!",
     },
     "bg": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -341,6 +343,7 @@ TRANSLATIONS = {
         "about_discord": "Присъединете се към нашия Discord",
         "about_paypal": "Дарете чрез PayPal",
         "about_patreon": "Подкрепете ни в Patreon",
+        "update_available_btn": "Update Available!",
     },
     "bn": {
         "admin_required": "Administrator privileges are required for this action.",
@@ -455,6 +458,7 @@ TRANSLATIONS = {
         "about_discord": "আমাদের ডিসকোর্ডে যোগ দিন",
         "about_paypal": "পেপ্যালের মাধ্যমে দান করুন",
         "about_patreon": "প্যাট্রিয়নে সমর্থন করুন",
+        "update_available_btn": "Update Available!",
     },
     "cs": {
         "admin_required": "Jsou vyžadována oprávnění administrátora.",
@@ -569,6 +573,7 @@ TRANSLATIONS = {
         "about_discord": "Připojte se k našemu Discordu",
         "about_paypal": "Přispějte přes PayPal",
         "about_patreon": "Podpořte nás na Patreonu",
+        "update_available_btn": "Update Available!",
     },
     "da": {
         "admin_required": "Administratorrettigheder er påkrævet.",
@@ -1025,6 +1030,7 @@ TRANSLATIONS = {
         "about_discord": "Join our Discord",
         "about_paypal": "Donate via PayPal",
         "about_patreon": "Support on Patreon",
+        "update_available_btn": "Update Available!",
     },
     "es": {
         "admin_required": "Se requieren privilegios de administrador.",
@@ -2126,6 +2132,7 @@ TRANSLATIONS = {
         "mod_settings_title": "Modpack Beállítások",
         "lockdown_message": "Az Elden Ring fut... A kezelőfelület lezárva.",
         "config_missing_warning": "Figyelem: Hiányzó konfigurációs fájl!\n\n{file}\n\nKérlek, használd a 'Repair' (Javítás) funkciót a hiányzó fájlok pótlásához.",
+        "update_available_btn": "Frissítés elérhető!",
     },
     "id": {
         "admin_required": "Diperlukan hak akses administrator.",
