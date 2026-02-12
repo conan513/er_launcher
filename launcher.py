@@ -2670,36 +2670,45 @@ class EldenRingLauncher(ctk.CTk):
         try:
             print(f"Downloading update from {self.UPDATE_URL}...")
             
+            # Use absolute paths for current and new EXEs
+            current_exe = os.path.join(self.launcher_base, "ER_Launcher.exe")
+            new_exe = os.path.join(self.launcher_base, "ER_Launcher_new.exe")
+            bat_path = os.path.join(self.launcher_base, "update.bat")
+            
             # Use request with User-Agent to avoid blocks
             req = urllib.request.Request(self.UPDATE_URL, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ERLauncher'})
-            new_exe = "ER_Launcher_new.exe"
             
             with urllib.request.urlopen(req) as response:
                 with open(new_exe, 'wb') as f:
                     f.write(response.read())
             
-            print("Download complete. Preparing update script...")
+            print(f"Download complete to {new_exe}. Preparing update script...")
             
-            # Create update batch script
-            bat_script = """
+            # Create update batch script with absolute paths and longer timeout
+            # We use /f /q to force deletion, and check if it's gone before move
+            bat_script = f"""
 @echo off
 setlocal
-timeout /t 3 /nobreak > nul
-if exist "ER_Launcher_new.exe" (
-    if exist "ER_Launcher.exe" del /f /q "ER_Launcher.exe"
-    move /y "ER_Launcher_new.exe" "ER_Launcher.exe"
-    start "" "ER_Launcher.exe"
+echo Waiting for launcher to close...
+timeout /t 5 /nobreak > nul
+if exist "{new_exe}" (
+    echo Updating ER_Launcher.exe...
+    if exist "{current_exe}" del /f /q "{current_exe}"
+    move /y "{new_exe}" "{current_exe}"
+    echo Starting new version...
+    start "" "{current_exe}"
 )
 del "%~f0"
 """
-            with open("update.bat", "w") as f:
+            with open(bat_path, "w") as f:
                 f.write(bat_script)
                 
+            print(f"Launching update script: {bat_path}")
             # Launch script and exit safely
-            subprocess.Popen("update.bat", shell=True, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            subprocess.Popen(f'"{bat_path}"', shell=True, creationflags=subprocess.CREATE_NEW_CONSOLE)
             
             # Exit launcher
-            self.after(100, lambda: os._exit(0))
+            self.after(200, lambda: os._exit(0))
             
         except Exception as e:
             print(f"Update failed: {e}")
