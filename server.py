@@ -6,18 +6,30 @@ import time
 import os
 import hashlib
 
-logging.basicConfig(level=logging.INFO)
+SERVER_BASE = os.path.dirname(os.path.abspath(__file__))
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(SERVER_BASE, "server.log"), encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
 
 CLIENTS = {} # websocket: {"nickname": "Unknown", "modpack": "Vanilla", "color": "#gray"}
 CHAT_HISTORY = []
 MAX_HISTORY = 100
-LOG_FILE = "chat_log.json"
+LOBBIES = {} # websocket: {"password": "...", "nickname": "...", "color": "..."}
 MAX_MESSAGE_LENGTH = 500
 RATE_LIMIT_SECONDS = 3
 IP_LAST_MESSAGE_TIME = {}
 NICKNAME_COLOR_MAP = {}
-PLAYTIME_FILE = "playtime.json"
-PLAYTIME_DATA = {} # user_id: total_seconds
+LOG_FILE = os.path.join(SERVER_BASE, "chat_log.json")
+USER_DATA_FILE = os.path.join(SERVER_BASE, "user_data.json")
+USER_DATA = {} # user_id: {"nickname": "...", "tripcode": "...", "playtime": 0}
+# Old files for migration
+PLAYTIME_FILE = os.path.join(SERVER_BASE, "playtime.json")
+USER_METADATA_FILE = os.path.join(SERVER_BASE, "user_metadata.json")
 COLOR_PALETTE = [
     "#ff6b6b", "#4ecdc4", "#45b7d1", "#f7d794", "#786fa6", 
     "#f8a5c2", "#63cdda", "#ea8685", "#546de5", "#e15f41",
@@ -71,24 +83,59 @@ def load_chat_history():
         except Exception as e:
             logging.error(f"Failed to load chat history: {e}")
 
-def save_playtime():
+def save_user_data():
     try:
-        temp_file = PLAYTIME_FILE + ".tmp"
+        temp_file = USER_DATA_FILE + ".tmp"
         with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(PLAYTIME_DATA, f, ensure_ascii=False, indent=2)
-        os.replace(temp_file, PLAYTIME_FILE)
+            json.dump(USER_DATA, f, ensure_ascii=False, indent=2)
+        os.replace(temp_file, USER_DATA_FILE)
     except Exception as e:
-        logging.error(f"Failed to save playtime: {e}")
+        logging.error(f"Failed to save user data: {e}")
 
-def load_playtime():
-    global PLAYTIME_DATA
+def load_user_data():
+    global USER_DATA
+    logging.info(f"Loading user data from: {USER_DATA_FILE}")
+    # 1. Load existing user_data.json if it exists
+    if os.path.exists(USER_DATA_FILE):
+        try:
+            with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
+                USER_DATA = json.load(f)
+            logging.info(f"Loaded unified data for {len(USER_DATA)} users.")
+        except Exception as e:
+            logging.error(f"Failed to load user data: {e}")
+            
+    # 2. Migration Logic: If user_data is empty or new, check for old separate files
+    migrated = False
     if os.path.exists(PLAYTIME_FILE):
         try:
             with open(PLAYTIME_FILE, "r", encoding="utf-8") as f:
-                PLAYTIME_DATA = json.load(f)
-            logging.info(f"Loaded playtime data for {len(PLAYTIME_DATA)} users.")
+                old_playtime = json.load(f)
+                for uid, seconds in old_playtime.items():
+                    if uid not in USER_DATA: USER_DATA[uid] = {}
+                    USER_DATA[uid]["playtime"] = USER_DATA[uid].get("playtime", 0) + seconds
+            logging.info("Migrated old playtime data.")
+            migrated = True
         except Exception as e:
-            logging.error(f"Failed to load playtime: {e}")
+            logging.error(f"Migration error (playtime): {e}")
+
+    if os.path.exists(USER_METADATA_FILE):
+        try:
+            with open(USER_METADATA_FILE, "r", encoding="utf-8") as f:
+                old_meta = json.load(f)
+                for uid, meta in old_meta.items():
+                    if uid not in USER_DATA: USER_DATA[uid] = {}
+                    USER_DATA[uid]["nickname"] = meta.get("nickname", "Anonymous")
+                    USER_DATA[uid]["tripcode"] = meta.get("tripcode", "????")
+            logging.info("Migrated old metadata.")
+            migrated = True
+        except Exception as e:
+            logging.error(f"Migration error (metadata): {e}")
+            
+    if migrated:
+        save_user_data()
+        logging.info(f"Consolidated data saved to {USER_DATA_FILE}. Migration successful.")
+    else:
+        logging.info("No migration files found or migration not needed.")
 
 async def broadcast(message):
     if CLIENTS:
@@ -98,7 +145,8 @@ async def broadcast_player_list():
     players = []
     for meta in CLIENTS.values():
         uid = meta.get("user_id", "anonymous")
-        total_seconds = PLAYTIME_DATA.get(uid, 0)
+        user_info = USER_DATA.get(uid, {})
+        total_seconds = user_info.get("playtime", 0)
         
         # Format playtime string
         if total_seconds < 60:
@@ -119,6 +167,16 @@ async def broadcast_player_list():
         })
     await broadcast(json.dumps({"type": "player_list", "players": players}, ensure_ascii=False))
 
+async def broadcast_lobby_list():
+    lobbies = []
+    for meta in LOBBIES.values():
+        lobbies.append({
+            "nickname": meta["nickname"],
+            "password": meta["password"],
+            "color": meta["color"]
+        })
+    await broadcast(json.dumps({"type": "lobby_list", "lobbies": lobbies}, ensure_ascii=False))
+
 async def handle_client(websocket, path=None):
     ip = websocket.remote_address[0]
     logging.info(f"New client connected: {ip}")
@@ -138,6 +196,9 @@ async def handle_client(websocket, path=None):
     if CHAT_HISTORY:
         history_payload = json.dumps({"type": "history", "messages": CHAT_HISTORY}, ensure_ascii=False)
         await websocket.send(history_payload)
+        
+    # Send lobby list to new client
+    await broadcast_lobby_list()
         
     first_message = True
     
@@ -160,8 +221,12 @@ async def handle_client(websocket, path=None):
                         delta = now - old_meta["last_status_time"]
                         uid = old_meta.get("user_id", "anonymous")
                         if uid != "anonymous":
-                             PLAYTIME_DATA[uid] = PLAYTIME_DATA.get(uid, 0) + delta
-                             save_playtime()
+                            if uid not in USER_DATA: USER_DATA[uid] = {}
+                            USER_DATA[uid]["playtime"] = USER_DATA[uid].get("playtime", 0) + delta
+                            logging.info(f"[PLAYTIME] User {nick} ({uid[:8]}): +{delta:.1f}s (was in_game, now: {in_game})")
+                            save_user_data()
+                    else:
+                        logging.debug(f"[PLAYTIME] User {nick}: No time added (in_game: {old_meta.get('in_game', False)} -> {in_game})")
 
                     tripcode = hashlib.sha256(user_id.encode()).hexdigest()[:4]
                     color = get_nickname_color(nick)
@@ -175,6 +240,22 @@ async def handle_client(websocket, path=None):
                         "user_id": user_id,
                         "last_status_time": now
                     }
+                    
+                    # Update metadata
+                    if user_id != "anonymous":
+                        if user_id not in USER_DATA: USER_DATA[user_id] = {}
+                        USER_DATA[user_id].update({
+                            "nickname": nick,
+                            "tripcode": tripcode
+                        })
+                        save_user_data()
+                    
+                    # Auto-remove lobby if player is no longer in-game
+                    if not in_game and websocket in LOBBIES:
+                        logging.info(f"Removing lobby for {nick} - game exited.")
+                        del LOBBIES[websocket]
+                        await broadcast_lobby_list()
+
                     await broadcast_player_list()
 
                 elif data.get("type") == "chat":
@@ -209,8 +290,9 @@ async def handle_client(websocket, path=None):
                         delta = now - old_meta["last_status_time"]
                         uid = old_meta.get("user_id", "anonymous")
                         if uid != "anonymous":
-                             PLAYTIME_DATA[uid] = PLAYTIME_DATA.get(uid, 0) + delta
-                             save_playtime()
+                            if uid not in USER_DATA: USER_DATA[uid] = {}
+                            USER_DATA[uid]["playtime"] = USER_DATA[uid].get("playtime", 0) + delta
+                            save_user_data()
 
                     CLIENTS[websocket] = {
                         "nickname": nick, 
@@ -255,7 +337,8 @@ async def handle_client(websocket, path=None):
                     players = []
                     for meta in CLIENTS.values():
                         uid = meta.get("user_id", "anonymous")
-                        total_seconds = PLAYTIME_DATA.get(uid, 0)
+                        user_info = USER_DATA.get(uid, {})
+                        total_seconds = user_info.get("playtime", 0)
                         
                         if total_seconds < 60: playtime_str = f"{int(total_seconds)}s"
                         elif total_seconds < 3600: playtime_str = f"{int(total_seconds // 60)}m"
@@ -271,6 +354,50 @@ async def handle_client(websocket, path=None):
                             "playtime": playtime_str
                         })
                     await websocket.send(json.dumps({"type": "player_list", "players": players}, ensure_ascii=False))
+                
+                elif data.get("type") == "host_lobby":
+                    password = data.get("password", "")
+                    if password:
+                        meta = CLIENTS.get(websocket, {})
+                        LOBBIES[websocket] = {
+                            "password": password,
+                            "nickname": meta.get("nickname", "Unknown"),
+                            "color": meta.get("color", "gray")
+                        }
+                        logging.info(f"Lobby hosted by {LOBBIES[websocket]['nickname']} with pass: {password}")
+                        await broadcast_lobby_list()
+
+                elif data.get("type") == "request_lobbies":
+                    await broadcast_lobby_list()
+
+                elif data.get("type") == "request_leaderboard":
+                    logging.info(f"Leaderboard requested. USER_DATA has {len(USER_DATA)} entries.")
+                    # Sort by playtime descending
+                    leaderboard_candidates = []
+                    for uid, info in USER_DATA.items():
+                        # Robust check: info MUST be a dict
+                        if isinstance(info, dict) and info.get("playtime", 0) >= 0:
+                            leaderboard_candidates.append((uid, info.get("playtime", 0)))
+                    
+                    logging.info(f"Found {len(leaderboard_candidates)} valid leaderboard candidates.")
+                    sorted_playtime = sorted(leaderboard_candidates, key=lambda x: x[1], reverse=True)[:50]
+                    leaderboard = []
+                    for uid, total_seconds in sorted_playtime:
+                        info = USER_DATA.get(uid, {})
+                        if not isinstance(info, dict): info = {}
+                        
+                        if total_seconds < 60: playtime_str = f"{int(total_seconds)}s"
+                        elif total_seconds < 3600: playtime_str = f"{int(total_seconds // 60)}m"
+                        else: playtime_str = f"{total_seconds / 3600:.1f}h"
+                        
+                        leaderboard.append({
+                            "nickname": info.get("nickname", "Anonymous"),
+                            "tripcode": info.get("tripcode", "????"),
+                            "playtime": playtime_str,
+                            "playtime_seconds": total_seconds
+                        })
+                    logging.info(f"Sending leaderboard with {len(leaderboard)} entries.")
+                    await websocket.send(json.dumps({"type": "leaderboard", "entries": leaderboard}, ensure_ascii=False))
 
             except json.JSONDecodeError:
                 logging.warning(f"Invalid JSON received from {ip}")
@@ -285,17 +412,22 @@ async def handle_client(websocket, path=None):
                 delta = now - meta["last_status_time"]
                 uid = meta.get("user_id", "anonymous")
                 if uid != "anonymous":
-                    PLAYTIME_DATA[uid] = PLAYTIME_DATA.get(uid, 0) + delta
-                    save_playtime()
+                    if uid not in USER_DATA: USER_DATA[uid] = {}
+                    USER_DATA[uid]["playtime"] = USER_DATA[uid].get("playtime", 0) + delta
+                    save_user_data()
             del CLIENTS[websocket]
+            
+        if websocket in LOBBIES:
+            del LOBBIES[websocket]
+            await broadcast_lobby_list()
             
         # Broadcast updated user count and list
         await broadcast(json.dumps({"type": "user_count", "count": len(CLIENTS)}, ensure_ascii=False))
         await broadcast_player_list()
 
-# Load history on module load
+# Load data on module load
 load_chat_history()
-load_playtime()
+load_user_data()
 
 async def main():
     # Use 0.0.0.0 to allow external connections, port 8765

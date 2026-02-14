@@ -158,6 +158,7 @@ class EldenRingLauncher(ctk.CTk):
         
         self.scroll_frame = None
         self.current_tab_key = "tab_play"
+        self.manual_unlock = False
         
         # Set window size based on chat visibility
         initial_width = 1000 if self.show_chat else 660
@@ -186,9 +187,9 @@ class EldenRingLauncher(ctk.CTk):
             ctk.set_widget_scaling(1.0)
             ctk.set_window_scaling(1.0)
 
-        # Check for updates on startup
-        self.check_for_updates()
-        self.check_for_modpack_updates()
+        # Postponed to start_background_tasks after fade-in
+        # self.check_for_updates()
+        # self.check_for_modpack_updates()
 
         # Check for administrative privileges if game is in Program Files (Proactive)
         self.check_admin_status()
@@ -221,7 +222,7 @@ class EldenRingLauncher(ctk.CTk):
         }
         
         self.last_broadcast_time = 0
-        self.monitor_process() # Start checking for game status
+        # self.monitor_process() # Postponed to start_background_tasks after fade-in
         
     def center_window(self, width, height):
         self.update_idletasks()
@@ -412,7 +413,7 @@ class EldenRingLauncher(ctk.CTk):
         # Save current tab key before refreshing
         if hasattr(self, 'tabview') and self.tabview.winfo_exists():
             current_name = self.tabview.get()
-            for key in ["tab_play", "tab_settings", "tab_tools"]:
+            for key in ["tab_play", "tab_settings", "tab_seamless", "tab_tools", "tab_about"]:
                 if self._t(key) == current_name:
                     self.current_tab_key = key
                     break
@@ -951,6 +952,7 @@ class EldenRingLauncher(ctk.CTk):
 
         self.tab_play = self.tabview.add(self._t("tab_play"))
         self.tab_settings = self.tabview.add(self._t("tab_settings"))
+        self.tab_seamless = self.tabview.add(self._t("tab_seamless"))
         self.tab_tools = self.tabview.add(self._t("tab_tools"))
         self.tab_about = self.tabview.add(self._t("tab_about"))
         
@@ -969,6 +971,9 @@ class EldenRingLauncher(ctk.CTk):
 
         # --- CHAT SIDEBAR ---
         self.setup_chat_sidebar(self.sidebar_frame)
+        
+        # --- SEAMLESS TAB ---
+        self.setup_seamless_tab()
 
         # --- PLAY TAB ---
 
@@ -1012,24 +1017,7 @@ class EldenRingLauncher(ctk.CTk):
         self.update_save_converter_state()
 
         # --- SETTINGS TAB ---
-        # Password Section
-        self.pass_frame = ctk.CTkFrame(self.tab_settings, fg_color="transparent")
-        self.pass_frame.pack(pady=(20, 5), padx=30, fill="x")
-
-        self.pass_label = ctk.CTkLabel(self.pass_frame, text=self._t("pass_label"), font=("Arial", 13, "bold"), text_color="#d4af37")
-        self.pass_label.pack(side="left", padx=(0, 10))
-
-        self.password_var = ctk.StringVar(value=self.read_password())
-        self.password_var.trace_add("write", self.on_password_change)
-        self.password_entry = ctk.CTkEntry(self.pass_frame, textvariable=self.password_var, 
-                                           width=200, height=35,
-                                           fg_color="#1a1a1a", border_color="#d4af37")
-        self.password_entry.pack(side="right", expand=True, fill="x")
-
-        self.pass_note = ctk.CTkLabel(self.tab_settings, text=self._t("pass_note"), 
-                                      font=("Arial", 10), text_color="#888888")
-        self.pass_note.pack(pady=(0, 20))
-
+        
         # Language Selector
         lang_label = ctk.CTkLabel(self.tab_settings, text=self._t("select_lang"), font=("Arial", 12, "bold"), text_color="#d4af37")
         lang_label.pack(pady=(10, 5))
@@ -1259,6 +1247,10 @@ class EldenRingLauncher(ctk.CTk):
     
     def update_fps_limit_visibility(self):
         """Enable/disable FPS limit slider based on FPS Unlocker toggle."""
+        # Safety check - widgets might not exist if Vanilla is selected
+        if not hasattr(self, 'fps_limit_slider') or not hasattr(self, 'fps_limit_label'):
+            return
+
         if self.qol_fps_unlocker_var.get():
             self.fps_limit_slider.configure(state="normal")
             self.fps_limit_label.configure(text_color="#d4af37")
@@ -1507,10 +1499,15 @@ class EldenRingLauncher(ctk.CTk):
         self.chat_status_label = ctk.CTkLabel(header_frame, text=self._t("chat_disconnected"), font=("Arial", 10), text_color="gray")
         self.chat_status_label.pack(side="right", padx=10)
 
-        # Lockdown Notice (hidden by default, shown during game)
+        # Lockdown Notice and Restore Button (hidden by default, shown during game)
         self.chat_lockdown_notice = ctk.CTkLabel(parent, text=self._t("lockdown_message"), 
                                                  font=("Arial", 10, "bold"), text_color="#e15f41",
                                                  fg_color="#1a1a1a", corner_radius=5)
+        
+        self.restore_view_btn = ctk.CTkButton(parent, text=f"🔄 {self._t('btn_restore_view')}",
+                                              command=self.toggle_manual_unlock,
+                                              height=24, font=("Arial", 10, "bold"),
+                                              fg_color="#3e4a3d", hover_color="#4e5b4d")
         # Not packed yet
 
         self.chat_nick_entry = tk.Entry(parent, textvariable=self.chat_nickname_var,
@@ -1533,14 +1530,19 @@ class EldenRingLauncher(ctk.CTk):
         self.player_list_label.pack(side="left")
         
         self.playtime_header_label = ctk.CTkLabel(self.player_list_header_frame, text=self._t("playtime_header"), font=("Arial", 8, "bold"), text_color="#aaaaaa")
-        self.playtime_header_label.pack(side="right")
+        self.playtime_header_label.pack(side="right", padx=(5, 0))
+        
+        self.btn_top = ctk.CTkButton(self.player_list_header_frame, text=self._t("btn_leaderboard"), width=50, height=20, 
+                                     font=("Arial", 10, "bold"), fg_color="#1a1a1a", border_width=1, border_color="#d4af37",
+                                     command=self.request_leaderboard)
+        self.btn_top.pack(side="right", padx=5)
         
         self.player_list_box = ctk.CTkTextbox(parent, height=60, state="disabled", wrap="word", font=("Segoe UI Emoji", 10), fg_color="#0d0d0d", text_color="#cccccc", border_width=1, border_color="#333333")
         self.player_list_box.pack(fill="x", padx=10, pady=(0, 5))
-        try:
-            # Add a right-aligned tab stop at the end of the line
-            self.player_list_box._textbox.configure(tabs=('260', 'right'))
-        except: pass
+        self.player_list_box.pack(fill="x", padx=10, pady=(0, 5))
+        
+        # Dynamic tab stop for right-aligned playtime
+        self.player_list_box.bind("<Configure>", self.update_player_list_tabs)
 
         # Chat History
         self.chat_history = ctk.CTkTextbox(parent, state="disabled", wrap="word", font=("Segoe UI Emoji", 11), fg_color="#0d0d0d")
@@ -1892,6 +1894,23 @@ class EldenRingLauncher(ctk.CTk):
             self.last_send_time = now # Update cooldown
             self.chat_input.delete(0, 'end')
 
+    def update_player_list_tabs(self, event=None):
+        """Update the tab stops for the player list based on current width."""
+        if not hasattr(self, 'player_list_box') or not self.player_list_box.winfo_exists():
+            return
+            
+        # Get current width from event or widget
+        width = event.width if event else self.player_list_box.winfo_width()
+        
+        # Calculate trailing tab stop (width - padding)
+        # Approximate scrollbar width and padding
+        right_tab = max(50, width - 20) 
+        
+        try:
+            self.player_list_box._textbox.configure(tabs=(str(right_tab), 'right'))
+        except:
+            pass
+
     def render_player_list(self, players):
         if hasattr(self, 'player_list_box') and self.player_list_box.winfo_exists():
             self.player_list_box.configure(state="normal")
@@ -2030,10 +2049,13 @@ class EldenRingLauncher(ctk.CTk):
                     self._add_to_history_ui(data)
                     self.chat_history.configure(state="disabled")
                 
-                elif data["type"] == "system":
-                    self.chat_history.configure(state="normal")
-                    self._add_to_history_ui(data)
-                    self.chat_history.configure(state="disabled")
+                elif data["type"] == "lobby_list":
+                    lobbies = data.get("lobbies", [])
+                    if hasattr(self, 'on_lobby_update'):
+                        self.on_lobby_update(lobbies)
+                
+                elif data["type"] == "leaderboard":
+                    self.on_leaderboard_received(data.get("entries", []))
 
         except Exception as e:
             # Log error but don't stop the loop (e.g., if widget destroyed during update)
@@ -2079,20 +2101,127 @@ class EldenRingLauncher(ctk.CTk):
             if tripcode:
                 self.chat_history.insert("end", f"({tripcode})", "tripcode")
             self.chat_history.insert("end", ": ", tag_name)
-            self.chat_history.insert("end", f"{msg}\n", "msg")
+            self.chat_history.insert("end", f"{msg}\n")
+            self.chat_history.see("end")
+
+    def request_leaderboard(self):
+        """Send a request for the leaderboard to the server."""
+        print("[DEBUG] Requesting leaderboard from server...")
+        if self.chat_socket and hasattr(self, 'send_queue'):
+            self.send_queue.put(json.dumps({"type": "request_leaderboard"}))
+            print("[DEBUG] Leaderboard request sent to queue")
+        else:
+            print("[DEBUG] Cannot send leaderboard request - no socket or queue")
+
+    def on_leaderboard_received(self, entries):
+        """Handle leaderboard data received from the server."""
+        print(f"[DEBUG] Leaderboard received with {len(entries)} entries")
+        if entries:
+            print(f"[DEBUG] First entry: {entries[0]}")
+        self.show_leaderboard_overlay(entries)
+
+    def show_leaderboard_overlay(self, entries):
+        """Show a popup overlay with the leaderboard standings."""
+        print(f"[DEBUG] show_leaderboard_overlay called with {len(entries)} entries")
+        if hasattr(self, 'leaderboard_overlay') and self.leaderboard_overlay.winfo_exists():
+            self.leaderboard_overlay.destroy()
+
+        self.leaderboard_overlay = ctk.CTkToplevel(self)
+        self.leaderboard_overlay.title(self._t("leaderboard_title"))
+        self.leaderboard_overlay.geometry("450x550")
+        self.leaderboard_overlay.resizable(False, False)
+        self.leaderboard_overlay.transient(self)  # Make it a child window
         
+        # Center the window
+        self.leaderboard_overlay.update_idletasks()
+        x = (self.leaderboard_overlay.winfo_screenwidth() // 2) - (450 // 2)
+        y = (self.leaderboard_overlay.winfo_screenheight() // 2) - (550 // 2)
+        self.leaderboard_overlay.geometry(f"+{x}+{y}")
+        self.leaderboard_overlay.focus_force()  # Bring to front
+
+        # Main container
+        main_frame = ctk.CTkFrame(self.leaderboard_overlay, fg_color="#0d0d0d", border_width=2, border_color="#d4af37")
+        main_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Title
+        ctk.CTkLabel(main_frame, text=self._t("leaderboard_title"), 
+                     font=("Cinzel", 20, "bold"), text_color="#d4af37").pack(pady=15)
+
+        # Header
+        header_frame = ctk.CTkFrame(main_frame, fg_color="#1a1a1a", height=35)
+        header_frame.pack(fill="x", padx=15, pady=(0, 10))
+        header_frame.pack_propagate(False)
         
-        self.chat_history.see("end")
-        
-        # Optimization: Prune old messages if they exceed 200 lines
-        try:
-            line_count = int(self.chat_history.index("end-1c").split(".")[0])
-            if line_count > 200:
-                # Delete first 50 lines to keep it smooth
-                self.chat_history.delete("1.0", "51.0")
-                self.chat_history.insert("1.0", "... (older messages pruned for performance) ...\n", "system")
-        except Exception as e:
-            print(f"Optimization error: {e}")
+        ctk.CTkLabel(header_frame, text=self._t("leaderboard_column_rank"), 
+                     font=("Arial", 11, "bold"), text_color="#888888", width=60, anchor="w").pack(side="left", padx=(10, 5))
+        ctk.CTkLabel(header_frame, text=self._t("leaderboard_column_player"), 
+                     font=("Arial", 11, "bold"), text_color="#888888", anchor="w").pack(side="left", padx=5, fill="x", expand=True)
+        ctk.CTkLabel(header_frame, text=self._t("leaderboard_column_playtime"), 
+                     font=("Arial", 11, "bold"), text_color="#888888", width=80, anchor="e").pack(side="right", padx=(5, 10))
+
+        # Scrollable content area
+        scroll_frame = ctk.CTkScrollableFrame(main_frame, fg_color="#0d0d0d", 
+                                              scrollbar_button_color="#d4af37",
+                                              scrollbar_button_hover_color="#b48f17")
+        scroll_frame.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+
+        if not entries:
+            # Empty state
+            empty_frame = ctk.CTkFrame(scroll_frame, fg_color="transparent")
+            empty_frame.pack(fill="both", expand=True, pady=50)
+            ctk.CTkLabel(empty_frame, text=self._t('leaderboard_no_data'), 
+                         font=("Arial", 14), text_color="#666666").pack()
+        else:
+            # Populate leaderboard entries
+            for i, entry in enumerate(entries):
+                rank = i + 1
+                nick = entry.get("nickname", "Anonymous")
+                trip = entry.get("tripcode", "")
+                playtime = entry.get("playtime", "0s")
+                
+                # Determine colors based on rank
+                if rank == 1:
+                    rank_color = "#d4af37"  # Gold
+                    bg_color = "#1a1a0d"
+                    rank_icon = "🥇"
+                elif rank == 2:
+                    rank_color = "#C0C0C0"  # Silver
+                    bg_color = "#1a1a1a"
+                    rank_icon = "🥈"
+                elif rank == 3:
+                    rank_color = "#CD7F32"  # Bronze
+                    bg_color = "#1a1410"
+                    rank_icon = "🥉"
+                else:
+                    rank_color = "#666666"
+                    bg_color = "#0d0d0d" if i % 2 == 0 else "#111111"
+                    rank_icon = f"{rank}."
+                
+                # Row frame
+                row_frame = ctk.CTkFrame(scroll_frame, fg_color=bg_color, height=40, corner_radius=5)
+                row_frame.pack(fill="x", pady=2, padx=5)
+                row_frame.pack_propagate(False)
+                
+                # Rank
+                ctk.CTkLabel(row_frame, text=rank_icon, font=("Arial", 12, "bold"), 
+                             text_color=rank_color, width=60, anchor="w").pack(side="left", padx=(10, 5))
+                
+                # Player name and tripcode
+                player_text = f"{nick}"
+                if trip:
+                    player_text += f" #{trip}"
+                ctk.CTkLabel(row_frame, text=player_text, font=("Arial", 12), 
+                             text_color="#cccccc", anchor="w").pack(side="left", padx=5, fill="x", expand=True)
+                
+                # Playtime
+                ctk.CTkLabel(row_frame, text=playtime, font=("Arial", 12, "bold"), 
+                             text_color="#aaaaaa", width=80, anchor="e").pack(side="right", padx=(5, 10))
+
+        # Close button
+        ctk.CTkButton(main_frame, text=self._t("btn_close"), 
+                      command=self.leaderboard_overlay.destroy,
+                      fg_color="#3e4a3d", hover_color="#4e5b4d", 
+                      width=120, height=35, font=("Arial", 12, "bold")).pack(pady=15)
 
     def monitor_process(self):
         try:
@@ -2136,6 +2265,7 @@ class EldenRingLauncher(ctk.CTk):
         self.after(2000, self.monitor_process)
 
     def fade_in(self):
+        self._fade_in_running = True
         alpha = self.attributes("-alpha")
         if alpha < 1.0:
             alpha += 0.1
@@ -2145,57 +2275,17 @@ class EldenRingLauncher(ctk.CTk):
         else:
             self.lift()
             self.focus_force()
+            self._fade_in_running = False
+            # Start background activities only after animation completes
+            self.start_background_tasks()
 
-    def read_password(self):
-        try:
-            if os.path.exists(self.settings_path):
-                config = configparser.ConfigParser()
-                config.read(self.settings_path)
-                if 'Settings' in config:
-                    return config['Settings'].get('cooppassword', "")
-                else:
-                    with open(self.settings_path, 'r') as f:
-                        for line in f:
-                            if "cooppassword" in line:
-                                return line.split("=")[1].strip()
-            return ""
-        except Exception as e:
-            print(f"Error reading password: {e}")
-            return ""
+    def start_background_tasks(self):
+        """Consolidate background tasks that should run after UI is visible."""
+        print("[STARTUP] Starting background tasks...")
+        self.check_for_updates()
+        self.check_for_modpack_updates()
+        self.monitor_process()
 
-    def on_password_change(self, *args):
-        self.save_password(show_status=False)
-
-    def save_password(self, show_status=True):
-        password = self.password_var.get()
-        try:
-            if os.path.exists(self.settings_path):
-                with open(self.settings_path, 'r') as f:
-                    lines = f.readlines()
-                
-                new_lines = []
-                found = False
-                for line in lines:
-                    if line.strip().startswith("cooppassword"):
-                        new_lines.append(f"cooppassword = {password}\n")
-                        found = True
-                    else:
-                        new_lines.append(line)
-                
-                if not found:
-                    new_lines.append(f"\ncooppassword = {password}\n")
-
-                with open(self.settings_path, 'w') as f:
-                    f.writelines(new_lines)
-                if show_status:
-                    self.status_label.configure(text=self._t("settings_saved"), text_color="#d4af37")
-                return True
-            else:
-                self.status_label.configure(text=self._t("settings_not_found"), text_color="#ff4444")
-                return False
-        except Exception as e:
-            self.status_label.configure(text=f"{self._t('save_error_prefix')} {e}", text_color="#ff4444")
-            return False
 
     def toggle_dlls(self, mode):
         ersc_enabled = os.path.join(self.game_dir, "ersc.dll")
@@ -2284,19 +2374,41 @@ class EldenRingLauncher(ctk.CTk):
         self.sync_modpack_settings()
 
         # Send status update to chat server if connected
-        if hasattr(self, 'send_queue') and self.chat_socket:
-            nick = self.chat_nickname_var.get().strip() or "Unknown"
-            self.send_queue.put(json.dumps({
-                "type": "status_update",
-                "nickname": nick,
-                "modpack": internal_key,
-                "in_game": self.is_game_running(),
-                "game_mode": getattr(self, 'last_game_mode', "Online")
-            }, ensure_ascii=False))
+        self.broadcast_status()
         
         # Refresh launch buttons to show download button if Reforged not installed
         if hasattr(self, 'tab_play') and self.tab_play.winfo_exists():
             self.refresh_launch_buttons()
+            
+        # Update Seamless tab scaling restriction
+        self.update_seamless_scaling_availability()
+
+    def update_seamless_scaling_availability(self):
+        """Set scaling to 0 and disable if Reforged is selected."""
+        current_modpack = self.modpack_var.get()
+        is_reforged = (current_modpack == self._t("reforged") or current_modpack == "Reforged")
+        
+        scaling_keys = [
+            "SCALING|enemy_health_scaling",
+            "SCALING|enemy_damage_scaling",
+            "SCALING|enemy_posture_scaling",
+            "SCALING|boss_health_scaling",
+            "SCALING|boss_damage_scaling",
+            "SCALING|boss_posture_scaling"
+        ]
+        
+        for key in scaling_keys:
+            if key in self.seamless_widgets:
+                widget = self.seamless_widgets[key]
+                if is_reforged:
+                    # Guard against trace loop if needed, but since it's disabled it shouldn't trigger often
+                    # We use configure(state="normal") before deleting to make sure it works if it was disabled
+                    widget.configure(state="normal")
+                    widget.delete(0, tk.END)
+                    widget.insert(0, "0")
+                    widget.configure(state="disabled")
+                else:
+                    widget.configure(state="normal")
 
 
     def apply_modpack(self, pack_name):
@@ -2340,59 +2452,62 @@ class EldenRingLauncher(ctk.CTk):
         if not self.game_dir:
             return
 
-        # Get current selected value (translated)
-        current_val = self.modpack_var.get()
-        
-        # Determine internal key
-        internal_key = "Vanilla"
-        if current_val == self._t("reforged"): internal_key = "Reforged"
-        elif current_val == self._t("qol"): internal_key = "Quality of Life"
-        elif current_val == self._t("diablo"): internal_key = "Diablo Loot (RNG)"
-        elif current_val == "Reforged": internal_key = "Reforged"
-        elif current_val == "Quality of Life": internal_key = "Quality of Life" # Handle internal key if set directly
-        elif current_val == "Diablo Loot (RNG)": internal_key = "Diablo Loot (RNG)"
+        try:
+            # Get current selected value (translated)
+            current_val = self.modpack_var.get()
+            
+            # Determine internal key
+            internal_key = "Vanilla"
+            if current_val == self._t("reforged"): internal_key = "Reforged"
+            elif current_val == self._t("qol"): internal_key = "Quality of Life"
+            elif current_val == self._t("diablo"): internal_key = "Diablo Loot (RNG)"
+            elif current_val == "Reforged": internal_key = "Reforged"
+            elif current_val == "Quality of Life": internal_key = "Quality of Life" # Handle internal key if set directly
+            elif current_val == "Diablo Loot (RNG)": internal_key = "Diablo Loot (RNG)"
 
-        # Determine current mod folder based on internal key
-        pack_map = {
-            "Reforged": "mod_err",
-            "Quality of Life": "mod_qol",
-            "Diablo Loot (RNG)": "mod_rng"
-        }
-        mod_folder = pack_map.get(internal_key)
-        
-        # Only apply to QoL and Diablo modpacks
-        if not mod_folder:
-            return
+            # Determine current mod folder based on internal key
+            pack_map = {
+                "Reforged": "mod_err",
+                "Quality of Life": "mod_qol",
+                "Diablo Loot (RNG)": "mod_rng"
+            }
+            mod_folder = pack_map.get(internal_key)
             
-        # Check Sharpening Status
-        shader_file = os.path.join(self.game_dir, mod_folder, "shader", "gxposteffect.shaderbnd.dcx")
-        shader_disabled = shader_file + ".disabled"
-        
-        # If .disabled exists, sharpening is ENABLED (checkbox unchecked)
-        # If .dcx exists, sharpening is DISABLED (checkbox checked)
-        if os.path.exists(shader_disabled):
-            self.disable_sharpening_var.set(False)
-            self.save_config_value("disable_sharpening", "False")
-        elif os.path.exists(shader_file):
-            self.disable_sharpening_var.set(True)
-            self.save_config_value("disable_sharpening", "True")
+            # Only apply to QoL and Diablo modpacks
+            if not mod_folder:
+                return
+                
+            # Check Sharpening Status
+            shader_file = os.path.join(self.game_dir, mod_folder, "shader", "gxposteffect.shaderbnd.dcx")
+            shader_disabled = shader_file + ".disabled"
             
-        # Sync FPS Unlocker Status (Global)
-        fps_dll = os.path.join(self.game_dir, "dinput8.dll")
-        fps_disabled = fps_dll + ".disabled"
-        
-        if os.path.exists(fps_dll):
-            self.qol_fps_unlocker_var.set(True)
-            self.save_config_value("qol_fps_unlocker_enabled", "True")
-            self.update_fps_limit_visibility()
-        elif os.path.exists(fps_disabled):
-            self.qol_fps_unlocker_var.set(False)
-            self.save_config_value("qol_fps_unlocker_enabled", "False")
-            self.update_fps_limit_visibility()
-        else:
-             # Default to unchecked (enabled) if neither exists, or maybe check warning?
-             # For sync, we just want to reflect state if possible.
-             pass
+            # If .disabled exists, sharpening is ENABLED (checkbox unchecked)
+            # If .dcx exists, sharpening is DISABLED (checkbox checked)
+            if os.path.exists(shader_disabled):
+                self.disable_sharpening_var.set(False)
+                self.save_config_value("disable_sharpening", "False")
+            elif os.path.exists(shader_file):
+                self.disable_sharpening_var.set(True)
+                self.save_config_value("disable_sharpening", "True")
+                
+            # Sync FPS Unlocker Status (Global)
+            fps_dll = os.path.join(self.game_dir, "dinput8.dll")
+            fps_disabled = fps_dll + ".disabled"
+            
+            if os.path.exists(fps_dll):
+                self.qol_fps_unlocker_var.set(True)
+                self.save_config_value("qol_fps_unlocker_enabled", "True")
+                self.update_fps_limit_visibility()
+            elif os.path.exists(fps_disabled):
+                self.qol_fps_unlocker_var.set(False)
+                self.save_config_value("qol_fps_unlocker_enabled", "False")
+                self.update_fps_limit_visibility()
+            else:
+                 # Default to unchecked (enabled) if neither exists, or maybe check warning?
+                 # For sync, we just want to reflect state if possible.
+                 pass
+        except Exception as e:
+            print(f"[ERROR] sync_modpack_settings failed: {e}")
 
     def get_mod_config(self, pack_name):
         """Build mod config dynamically based on toggle states and pack name."""
@@ -2620,9 +2735,29 @@ class EldenRingLauncher(ctk.CTk):
 
         # Ensure modpack is applied before launch
         self.apply_modpack(self.modpack_var.get())
-        if not self.save_password(): return
         if not self.handle_save_conversion("seamless"): return
         if not self.toggle_dlls("seamless"): return
+        
+        # Enforce Seamless settings
+        self.enforce_seamless_defaults()
+        
+        # Validate Password
+        config_path = os.path.join(self.game_dir, "ersc_settings.ini")
+        has_password = False
+        try:
+            parser = configparser.ConfigParser()
+            parser.read(config_path, encoding='utf-8')
+            if parser.has_option("PASSWORD", "cooppassword"):
+                pwd = parser.get("PASSWORD", "cooppassword")
+                if pwd and pwd.strip():
+                    has_password = True
+        except: pass
+        
+        if not has_password:
+            messagebox.showwarning(self._t("app_title"), self._t("seamless_no_password_error"))
+            self.tabview.set(self._t("tab_seamless"))
+            return
+        
         if os.path.exists(self.launch_exe):
             self.update_status(self._t("launch_seamless"), "#d4af37")
             self.last_game_mode = "Seamless"
@@ -2651,6 +2786,127 @@ class EldenRingLauncher(ctk.CTk):
 
         else:
             self.update_status(self._t("exe_not_found"), "#ff4444")
+
+    def show_seamless_lobby_view(self):
+        """Create and show the Seamless Co-op Lobby Overlay."""
+        # Safety check
+        if not hasattr(self, 'content_frame') or not self.content_frame.winfo_exists():
+            return
+
+        # Hide any existing lobby overlay
+        self.close_lobby_overlay()
+        
+        # Create overlay inside content_frame to only cover the main view, not the chat
+        self.lobby_overlay = ctk.CTkFrame(self.content_frame, fg_color="#151515", corner_radius=15, border_width=1, border_color="#d4af37")
+        self.lobby_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        
+        # Title
+        ctk.CTkLabel(self.lobby_overlay, text=self._t("lobby_title"), font=("Cinzel", 24, "bold"), text_color="#d4af37").pack(pady=(20, 10))
+        
+        # Main area
+        self.lobby_list_frame = ctk.CTkScrollableFrame(self.lobby_overlay, fg_color="#1a1a1a", border_width=1, border_color="#333333")
+        self.lobby_list_frame.pack(pady=10, padx=20, fill="both", expand=True)
+        
+        # Bottom: Control Buttons
+        btn_frame = ctk.CTkFrame(self.lobby_overlay, fg_color="transparent")
+        btn_frame.pack(pady=20, fill="x", padx=20)
+        
+        ctk.CTkButton(btn_frame, text=self._t("btn_host_public"), command=self.host_public_lobby,
+                       fg_color="#3e4a3d", hover_color="#4e5b4d", height=40, width=150, font=("Arial", 12, "bold"),
+                       border_width=1, border_color="#d4af37").pack(side="left", padx=10)
+                       
+        ctk.CTkButton(btn_frame, text=self._t("btn_host_private"), command=self.host_private_lobby,
+                       fg_color="#1a1a1a", hover_color="#333333", height=40, width=150, font=("Arial", 12, "bold"),
+                       border_width=1, border_color="#d4af37").pack(side="left", padx=10)
+                       
+        ctk.CTkButton(btn_frame, text=self._t("back_btn"), command=self.close_lobby_overlay,
+                       fg_color="#333333", hover_color="#444444", height=40, width=100).pack(side="right", padx=10)
+        
+        # Request latest lobbies
+        if hasattr(self, 'send_queue'):
+            self.send_queue.put(json.dumps({"type": "request_lobbies"}))
+            
+    def close_lobby_overlay(self):
+        if hasattr(self, 'lobby_overlay') and self.lobby_overlay.winfo_exists():
+            self.lobby_overlay.destroy()
+            
+    def on_lobby_update(self, lobbies):
+        """Callback when lobby list is received from server."""
+        if hasattr(self, 'lobby_list_frame') and self.lobby_list_frame.winfo_exists():
+            self.render_lobby_list(lobbies)
+            
+    def render_lobby_list(self, lobbies):
+        # Clear existing list
+        for widget in self.lobby_list_frame.winfo_children():
+            widget.destroy()
+            
+        if not lobbies:
+            ctk.CTkLabel(self.lobby_list_frame, text=self._t("lobby_no_active"), text_color="gray").pack(pady=50)
+            return
+            
+        for lobby in lobbies:
+            nick = lobby.get("nickname", "Unknown")
+            pwd = lobby.get("password", "???")
+            color = lobby.get("color", "gray")
+            
+            row = ctk.CTkFrame(self.lobby_list_frame, fg_color="#121212", corner_radius=8)
+            row.pack(pady=5, padx=5, fill="x")
+            
+            info_label = ctk.CTkLabel(row, text=f"{self._t('lobby_host_name')} {nick}  |  {self._t('lobby_password')} {pwd}", 
+                                      font=("Arial", 12, "bold"), text_color=color)
+            info_label.pack(side="left", padx=15, pady=10)
+            
+            # Using partial or lambda p=pwd to avoid closure issues
+            ctk.CTkButton(row, text=self._t("btn_join"), command=lambda p=pwd: self.join_lobby_by_pwd(p),
+                          width=100, height=30, fg_color="#3e4a3d", hover_color="#4e5b4d", font=("Arial", 11, "bold")).pack(side="right", padx=15)
+
+    def host_public_lobby(self):
+        # Get password from settings
+        pwd = ""
+        config_path = os.path.join(self.game_dir, "ersc_settings.ini")
+        try:
+            parser = configparser.ConfigParser()
+            parser.read(config_path, encoding='utf-8')
+            pwd = parser.get("PASSWORD", "cooppassword", fallback="")
+        except: pass
+        
+        if not pwd or not pwd.strip():
+            messagebox.showwarning(self._t("app_title"), self._t("seamless_no_password_error"))
+            self.close_lobby_overlay()
+            self.tabview.set(self._t("tab_seamless"))
+            return
+            
+        # Send to server
+        if hasattr(self, 'send_queue'):
+            self.send_queue.put(json.dumps({"type": "host_lobby", "password": pwd}))
+            
+        self.close_lobby_overlay()
+        self.launch_seamless()
+        
+    def host_private_lobby(self):
+        self.close_lobby_overlay()
+        self.launch_seamless()
+        
+    def join_lobby_by_pwd(self, password):
+        # Update INI file
+        config_path = os.path.join(self.game_dir, "ersc_settings.ini")
+        try:
+            parser = configparser.ConfigParser()
+            parser.read(config_path, encoding='utf-8')
+            if not parser.has_section("PASSWORD"):
+                parser.add_section("PASSWORD")
+            parser.set("PASSWORD", "cooppassword", password)
+            
+            with open(config_path, 'w', encoding='utf-8') as f:
+                parser.write(f)
+            
+            # Refresh UI if the entries are loaded
+            self.load_seamless_config()
+        except Exception as e:
+            print(f"Error updating password for join: {e}")
+            
+        self.close_lobby_overlay()
+        self.launch_seamless()
 
     def is_reforged_installed(self):
         """Check if mod_err folder exists in game directory."""
@@ -2980,7 +3236,7 @@ class EldenRingLauncher(ctk.CTk):
             self.seamless_col.pack(side="left", padx=10)
 
             self.seamless_btn = ctk.CTkButton(self.seamless_col, text=self._t("seamless_btn"), 
-                                              command=self.launch_seamless,
+                                              command=self.show_seamless_lobby_view,
                                               height=45, width=180,
                                               font=("Arial", 14, "bold"),
                                               fg_color="#3e4a3d", hover_color="#4e5b4d",
@@ -3025,6 +3281,10 @@ class EldenRingLauncher(ctk.CTk):
 
     def set_lockdown(self, locked):
         """Resize window to show only chat when game is running."""
+        # Manual Override: If user clicked Restore, don't re-lock while game is still running
+        if locked and getattr(self, 'manual_unlock', False):
+            return
+
         # Use a state variable to prevent repeated resizing
         if hasattr(self, '_launcher_locked_state') and self._launcher_locked_state == locked:
             return
@@ -3053,9 +3313,21 @@ class EldenRingLauncher(ctk.CTk):
                 # Fill entire window in lockdown
                 self.sidebar_frame.place(relx=0.0, rely=0.0, relwidth=1.0, relheight=1.0)
                 
-                # Update: Show lockdown notice in chat
-                if hasattr(self, 'chat_lockdown_notice'):
-                    self.chat_lockdown_notice.pack(fill="x", padx=15, pady=(2, 5), before=self.chat_nick_entry)
+                # Update: Show lockdown notice and restore button in chat
+                # Safety check: ensure the anchor widget exists and is packed
+                anchor = getattr(self, 'chat_nick_entry', None)
+                if anchor and anchor.winfo_exists():
+                    try:
+                        if hasattr(self, 'chat_lockdown_notice'):
+                            self.chat_lockdown_notice.pack(fill="x", padx=15, pady=(2, 0), before=anchor)
+                        if hasattr(self, 'restore_view_btn'):
+                            self.restore_view_btn.pack(fill="x", padx=15, pady=(0, 5), before=anchor)
+                    except:
+                        # Fallback if 'before' tag fails (e.g. not packed yet)
+                        if hasattr(self, 'chat_lockdown_notice'):
+                            self.chat_lockdown_notice.pack(fill="x", padx=15, pady=(2, 0))
+                        if hasattr(self, 'restore_view_btn'):
+                            self.restore_view_btn.pack(fill="x", padx=15, pady=(0, 5))
                 
                 # Apply Opacity
                 self.attributes("-alpha", self.ingame_opacity_var.get())
@@ -3064,14 +3336,24 @@ class EldenRingLauncher(ctk.CTk):
                 if self.always_on_top_var.get():
                     self.attributes("-topmost", True)
         else:
-            print("Game stopped: Restoring Full View.")
+            print("Game stopped or Manual Restore: Restoring Full View.")
+            # Reset manual unlock when game stops
+            if not self.is_game_running():
+                self.manual_unlock = False
+
             # Restore Opacity & Pin
-            self.attributes("-alpha", 1.0)
+            # Safety: Only force alpha 1.0 if we are not in the middle of fade-in
+            current_alpha = self.attributes("-alpha")
+            if current_alpha > 0.9 or not hasattr(self, '_fade_in_running'):
+                 self.attributes("-alpha", 1.0)
+
             self.attributes("-topmost", False)
             
-            # Update: Hide lockdown notice in chat
+            # Update: Hide lockdown notice and restore button
             if hasattr(self, 'chat_lockdown_notice'):
                 self.chat_lockdown_notice.pack_forget()
+            if hasattr(self, 'restore_view_btn'):
+                self.restore_view_btn.pack_forget()
 
             # Restore window size and frames based on normal chat visibility
             if self.show_chat:
@@ -3088,6 +3370,11 @@ class EldenRingLauncher(ctk.CTk):
                 if hasattr(self, 'content_frame'):
                     self.content_frame.place(relx=0.05, rely=0.05, relwidth=0.9, relheight=0.9)
                 self.center_window(660, 550)
+
+    def toggle_manual_unlock(self):
+        """Forcefully restore full view even if game is running."""
+        self.manual_unlock = True
+        self.set_lockdown(False)
 
     def check_for_updates(self):
         """Check for updates in a background thread with cache-busting."""
@@ -3161,12 +3448,15 @@ class EldenRingLauncher(ctk.CTk):
                  raise Exception("Download failed.")
             
             # Create update batch script with absolute paths and longer timeout
-            # We use /f /q to force deletion, and check if it's gone before move
+            # We use taskkill to ensure the process is dead, and clear _MEIPASS to avoid DLL errors
             bat_script = f"""
 @echo off
 setlocal
-echo Waiting for launcher to close...
-timeout /t 5 /nobreak > nul
+echo Ensuring launcher is closed...
+taskkill /f /im ER_Launcher.exe > nul 2>&1
+timeout /t 2 /nobreak > nul
+
+set _MEIPASS=
 if exist "{new_exe}" (
     echo Updating ER_Launcher.exe...
     if exist "{current_exe}" del /f /q "{current_exe}"
@@ -3249,6 +3539,279 @@ del "%~f0"
         self.modpack_update_available = False # Hide button
         self.refresh_launch_buttons()
         self.repair_modpack()
+
+    # --- SEAMLESS CO-OP SETTINGS ---
+
+    def setup_seamless_tab(self):
+        """Build the Seamless Co-op settings UI."""
+        self.seamless_scroll = ctk.CTkScrollableFrame(self.tab_seamless, fg_color="transparent")
+        self.seamless_scroll.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Title
+        title = ctk.CTkLabel(self.seamless_scroll, text=self._t("seamless_title"), font=("Arial", 16, "bold"), text_color="#d4af37")
+        title.pack(pady=(10, 20))
+
+        self.seamless_widgets = {} # Store widgets to get values later
+
+        # --- PASSWORD ---
+        self._add_section_header(self.seamless_scroll, self._t("seamless_password"))
+        self._add_seamless_entry("PASSWORD", "cooppassword", self._t("seamless_password"), width=200, desc_key="seamless_desc_password")
+
+        # --- GAMEPLAY ---
+        self._add_section_header(self.seamless_scroll, self._t("seamless_gameplay"))
+        
+        self._add_seamless_bool("GAMEPLAY", "allow_invaders", self._t("seamless_invaders"))
+        self._add_seamless_bool("GAMEPLAY", "death_debuffs", self._t("seamless_death_debuffs"))
+        self._add_seamless_bool("GAMEPLAY", "allow_summons", self._t("seamless_summons"))
+        self._add_seamless_bool("GAMEPLAY", "skip_splash_screens", self._t("seamless_skip_splash"))
+        
+        # Overhead Player Display (Option Menu)
+        oh_frame = ctk.CTkFrame(self.seamless_scroll, fg_color="transparent")
+        oh_frame.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(oh_frame, text=self._t("seamless_overhead_player_display") + ":", text_color="#aaaaaa").pack(side="left")
+        
+        # Map values to display text if needed, for now just use index/desc
+        oh_values = ["0 - Normal", "1 - None", "2 - Ping", "3 - Soul Level", "4 - Death Count", "5 - SL & Ping"]
+        # Bind auto-save to command
+        self.seamless_widgets["overhead_player_display"] = ctk.CTkOptionMenu(oh_frame, values=oh_values, width=150, fg_color="#333333",
+                                                                             command=lambda value: self.save_seamless_config(silent=True))
+        self.seamless_widgets["overhead_player_display"].pack(side="right")
+        # Description for overhead
+        ctk.CTkLabel(self.seamless_scroll, text=self._t("seamless_desc_overhead"), font=("Arial", 10), text_color="gray").pack(anchor="w", padx=20)
+        
+        # Master Volume
+        self._add_seamless_entry("GAMEPLAY", "default_boot_master_volume", self._t("seamless_default_boot_master_volume"), width=50, desc_key="seamless_desc_volume")
+
+        # --- SCALING ---
+        self._add_section_header(self.seamless_scroll, self._t("seamless_scaling"))
+        
+        self._add_seamless_entry("SCALING", "enemy_health_scaling", self._t("seamless_enemy_health"), desc_key="seamless_desc_enemy_health")
+        self._add_seamless_entry("SCALING", "enemy_damage_scaling", self._t("seamless_enemy_damage"), desc_key="seamless_desc_enemy_damage")
+        self._add_seamless_entry("SCALING", "enemy_posture_scaling", self._t("seamless_enemy_posture"), desc_key="seamless_desc_enemy_posture")
+        self._add_seamless_entry("SCALING", "boss_health_scaling", self._t("seamless_boss_health"), desc_key="seamless_desc_boss_health")
+        self._add_seamless_entry("SCALING", "boss_damage_scaling", self._t("seamless_boss_damage"), desc_key="seamless_desc_boss_damage")
+        self._add_seamless_entry("SCALING", "boss_posture_scaling", self._t("seamless_boss_posture"), desc_key="seamless_desc_boss_posture")
+
+        # Load initial values
+        self.load_seamless_config()
+        
+        # Apply Reforged restriction if needed
+        self.update_seamless_scaling_availability()
+
+    def _add_section_header(self, parent, text):
+        ctk.CTkLabel(parent, text=text, font=("Arial", 12, "bold"), text_color="white").pack(pady=(15, 5), anchor="w", padx=10)
+        ctk.CTkFrame(parent, height=2, fg_color="#333333").pack(fill="x", padx=10, pady=(0, 10))
+
+    def _add_seamless_bool(self, section, key, label_text):
+        var = ctk.IntVar()
+        # Bind auto-save
+        var.trace_add("write", lambda *args: self.save_seamless_config(silent=True))
+        
+        cb = ctk.CTkCheckBox(self.seamless_scroll, text=label_text, variable=var, onvalue=1, offvalue=0)
+        cb.pack(pady=2, padx=20, anchor="w")
+        self.seamless_widgets[f"{section}|{key}"] = var
+
+    def _add_seamless_entry(self, section, key, label_text, width=100, desc_key=None):
+        frame = ctk.CTkFrame(self.seamless_scroll, fg_color="transparent")
+        frame.pack(fill="x", padx=20, pady=5)
+        
+        # Upper row with label and entry
+        upper_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        upper_frame.pack(fill="x")
+        
+        ctk.CTkLabel(upper_frame, text=label_text + ":", text_color="#aaaaaa").pack(side="left")
+        
+        # Determine variable type - all entries are strings here
+        var = ctk.StringVar()
+        var.trace_add("write", lambda *args: self.save_seamless_config(silent=True))
+        
+        entry = ctk.CTkEntry(upper_frame, width=width, fg_color="#1a1a1a", textvariable=var)
+        entry.pack(side="right")
+        self.seamless_widgets[f"{section}|{key}"] = entry # Store entry widget or var? 
+        # ORIGINAL stored entry widget. But to use textvariable we need to store var or access entry.
+        # Actually, if we use textvariable, we should store var to be consistent, or just keep using entry.get()
+        # The original load/save used entry.delete/insert/get. 
+        # To minimize changes, I will keep self.seamless_widgets storing the entry, 
+        # but I will also attach the var to it so I don't lose the reference? 
+        # Actually, entry.configure(textvariable=var) works. 
+        # And I can still use entry.get().
+        
+        self.seamless_widgets[f"{section}|{key}"] = entry
+        
+        # Optional description below
+        if desc_key:
+            desc_text = self._t(desc_key)
+            ctk.CTkLabel(frame, text=desc_text, font=("Arial", 10), text_color="gray").pack(anchor="w", pady=(0, 5))
+
+    def load_seamless_config(self):
+        """Load values from ersc_settings.ini"""
+        config_path = os.path.join(self.game_dir, "ersc_settings.ini")
+        
+        if not os.path.exists(config_path):
+            # If missing, warn user and suggest repair (only if we are on the Seamless tab)
+            # But we are calling this during setup, so maybe just log it or show a placeholder?
+            # User request: "recommend repair function"
+            # We can show a label in the settings area if config is missing.
+            
+            # Clear widgets or disable them?
+            # For now, let's just return. The UI is built, just empty/default.
+            # We can add a warning label at top.
+            warning_label = ctk.CTkLabel(self.seamless_scroll, text=self._t("config_missing_warning").format(file="ersc_settings.ini"), 
+                                         text_color="#ff4444", justify="left")
+            warning_label.pack(pady=10, before=self.seamless_scroll.winfo_children()[0])
+            return
+
+        parser = configparser.ConfigParser()
+        try:
+            # explicit encoding to avoid issues with special chars or BOM
+            parser.read(config_path, encoding='utf-8')
+            
+            # Gameplay Bools
+            for key in ["allow_invaders", "death_debuffs", "allow_summons", "skip_splash_screens"]:
+                widget_key = f"GAMEPLAY|{key}"
+                if widget_key in self.seamless_widgets:
+                    val = parser.getint("GAMEPLAY", key, fallback=0)
+                    self.seamless_widgets[widget_key].set(val)
+
+            # Overhead Display
+            oh_val = parser.getint("GAMEPLAY", "overhead_player_display", fallback=0)
+            # Find matching string in option menu
+            oh_options = self.seamless_widgets["overhead_player_display"].cget("values")
+            if oh_options:
+                for opt in oh_options:
+                    if opt.startswith(str(oh_val)):
+                        self.seamless_widgets["overhead_player_display"].set(opt)
+                        break
+
+            # Entries (Gameplay, Scaling, Password)
+            entry_map = {
+                "GAMEPLAY": ["default_boot_master_volume"],
+                "SCALING": ["enemy_health_scaling", "enemy_damage_scaling", "enemy_posture_scaling", 
+                            "boss_health_scaling", "boss_damage_scaling", "boss_posture_scaling"],
+                "PASSWORD": ["cooppassword"]
+            }
+            
+            for section, keys in entry_map.items():
+                for key in keys:
+                    widget_key = f"{section}|{key}"
+                    if widget_key in self.seamless_widgets:
+                        val = parser.get(section, key, fallback="")
+                        self.seamless_widgets[widget_key].delete(0, tk.END)
+                        self.seamless_widgets[widget_key].insert(0, val)
+                        
+        except Exception as e:
+            print(f"Error loading Seamless config: {e}")
+            
+        # Apply Reforged restriction if needed
+        self.update_seamless_scaling_availability()
+
+    def enforce_seamless_defaults(self):
+        """Ensure critical Seamless Co-op settings are set before launch."""
+        config_path = os.path.join(self.game_dir, "ersc_settings.ini")
+        # If missing, we might want to create it or skip?
+        # User said "launcher *will* write this... on every launch".
+        # So we should create/update.
+        
+        parser = configparser.ConfigParser()
+        try:
+            if os.path.exists(config_path):
+                parser.read(config_path, encoding='utf-8')
+            
+            changed = False
+            
+            if not parser.has_section("SAVE"): 
+                parser.add_section("SAVE")
+                changed = True
+            if parser.get("SAVE", "save_file_extension", fallback="") != "co2":
+                parser.set("SAVE", "save_file_extension", "co2")
+                changed = True
+                
+            if not parser.has_section("LANGUAGE"): 
+                parser.add_section("LANGUAGE")
+                changed = True
+            if parser.get("LANGUAGE", "mod_language_override", fallback="") != "english":
+                parser.set("LANGUAGE", "mod_language_override", "english")
+                changed = True
+            
+            # Also ensure GAMEPLAY section exists for critical functions? 
+            # Not requested, but good practice if creating from scratch.
+            
+            if changed:
+                with open(config_path, 'w') as f:
+                    parser.write(f)
+                print(f"[Seamless] Enforced defaults in {config_path}")
+                
+        except Exception as e:
+            print(f"Error enforcing Seamless defaults: {e}")
+
+    def save_seamless_config(self, silent=False):
+        """Save values to ersc_settings.ini"""
+        config_path = os.path.join(self.game_dir, "ersc_settings.ini")
+
+        # If missing, we can try to create it, but better to check if it exists first or warn?
+        # User said "file will be found in game root folder".
+        # We will create it if missing, or use existing.
+        
+        parser = configparser.ConfigParser()
+        # Read existing to preserve comments/structure if possible? 
+        # ConfigParser kills comments. Users might not like that.
+        # But user asked to edit settings, standard python configparser is implied unless specified.
+        # Given the file content provided, it has comments. ConfigParser WILL REMOVE them.
+        # To preserve comments, we'd need a different lib or regex replacement.
+        # For this task, I'll use ConfigParser and maybe warn user or just accept it.
+        # Actually, let's try to just update specific lines if we want to be fancy, but ConfigParser is safer for logic.
+        # I'll stick to ConfigParser for reliability of values.
+        
+        try:
+            parser.read(config_path) # Read existing to keep other keys
+            
+            # Ensure sections exist
+            for section in ["GAMEPLAY", "SCALING", "PASSWORD", "SAVE", "LANGUAGE"]:
+                if not parser.has_section(section):
+                    parser.add_section(section)
+
+            # Gameplay Bools
+            for key in ["allow_invaders", "death_debuffs", "allow_summons", "skip_splash_screens"]:
+                val = self.seamless_widgets[f"GAMEPLAY|{key}"].get()
+                parser.set("GAMEPLAY", key, str(val))
+
+            # Overhead
+            oh_str = self.seamless_widgets["overhead_player_display"].get()
+            oh_val = oh_str.split(" ")[0] # Extract number
+            parser.set("GAMEPLAY", "overhead_player_display", oh_val)
+
+            # Entries (Gameplay, Scaling, Password)
+            entry_map = {
+                "GAMEPLAY": ["default_boot_master_volume"],
+                "SCALING": ["enemy_health_scaling", "enemy_damage_scaling", "enemy_posture_scaling", 
+                            "boss_health_scaling", "boss_damage_scaling", "boss_posture_scaling"],
+                "PASSWORD": ["cooppassword"]
+            }
+            
+            for section, keys in entry_map.items():
+                for key in keys:
+                    val = self.seamless_widgets[f"{section}|{key}"].get()
+                    parser.set(section, key, val)
+
+            # Enforce fixed values
+            if not parser.has_section("SAVE"): parser.add_section("SAVE")
+            parser.set("SAVE", "save_file_extension", "co2")
+            
+            if not parser.has_section("LANGUAGE"): parser.add_section("LANGUAGE")
+            parser.set("LANGUAGE", "mod_language_override", "english")
+
+            with open(config_path, 'w') as f:
+                parser.write(f)
+            
+            if not silent:
+                messagebox.showinfo(self._t("app_title"), self._t("settings_saved"))
+            else:
+                # Optional: Show subtle status like "Saving..."?
+                # For now just silent.
+                pass
+
+        except Exception as e:
+            messagebox.showerror(self._t("error_prefix"), f"Failed to save settings: {e}")
 
 if __name__ == "__main__":
     app = EldenRingLauncher()
