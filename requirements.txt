@@ -4,3 +4,5 @@ configparser
 Pillow
 pypresence
 websockets
+py7zr
+psutil

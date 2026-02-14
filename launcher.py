@@ -9,6 +9,7 @@ import subprocess
 import configparser
 import customtkinter as ctk
 import tkinter as tk
+from tkinter import messagebox
 import json
 import threading
 import urllib.request
@@ -63,6 +64,7 @@ class EldenRingLauncher(ctk.CTk):
     VERSION = "1.1.2"
     VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
+    MODPACK_VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/modpack.txt"
 
     def __init__(self):
         super().__init__()
@@ -124,6 +126,7 @@ class EldenRingLauncher(ctk.CTk):
         if not self.chat_user_id:
             self.chat_user_id = str(uuid.uuid4())
             self.save_config_value("chat_user_id", self.chat_user_id)
+        print(f"Chat User ID: {self.chat_user_id}")
             
         # Default Nickname Logic
         if not self.chat_nickname_var.get():
@@ -185,17 +188,14 @@ class EldenRingLauncher(ctk.CTk):
 
         # Check for updates on startup
         self.check_for_updates()
+        self.check_for_modpack_updates()
+
+        # Check for administrative privileges if game is in Program Files (Proactive)
+        self.check_admin_status()
 
         # UI Setup (Base)
         self.lockdown_frame = None
         self.setup_ui()
-        self.launch_start_time = 0
-        
-        # Start background monitor
-        self.after(2000, self.monitor_process)
-        
-        # Check for administrative privileges if game is in Program Files
-        self.after(1000, self.check_admin_status)
 
         self.emoji_shortcuts = {
             ":)": "🙂", ":-)": "🙂", ":smile:": "🙂",
@@ -219,6 +219,9 @@ class EldenRingLauncher(ctk.CTk):
             ":love:": "😍",
             ":lol:": "🤣"
         }
+        
+        self.last_broadcast_time = 0
+        self.monitor_process() # Start checking for game status
         
     def center_window(self, width, height):
         self.update_idletasks()
@@ -248,6 +251,7 @@ class EldenRingLauncher(ctk.CTk):
         
         if self.game_dir:
             self.update_paths(self.game_dir)
+            self.check_for_modpack_updates() # Re-check updates on path change
 
     def save_config(self, path):
         if not self.launcher_config.has_section('Main'):
@@ -257,6 +261,8 @@ class EldenRingLauncher(ctk.CTk):
             self.launcher_config.write(f)
         self.game_dir = path
         self.update_paths(path)
+        self.refresh_launch_buttons() # Refresh buttons after path change
+        self.check_for_modpack_updates() # Re-check updates on path change
 
     def update_paths(self, game_dir):
         self.settings_path = os.path.join(game_dir, "ersc_settings.ini")
@@ -340,13 +346,29 @@ class EldenRingLauncher(ctk.CTk):
     def check_admin_status(self):
         """Check if the launcher needs administrator privileges based on game path."""
         if is_admin():
-            # Already running as admin, maybe show a small indicator or just do nothing
+            # Already running as admin
             self.update_status(self._t("elevated_privileges"), "#d4af37")
             return
 
-        # Check if game path is in a protected system directory
-        if self.game_dir and self.is_path_protected(self.game_dir):
-            self.show_admin_elevation_ui()
+        if not self.game_dir:
+            return
+
+        # Check if game path is in a protected system directory OR not writable
+        is_protected = self.is_path_protected(self.game_dir)
+        
+        # Test write access
+        can_write = True
+        test_file = os.path.join(self.game_dir, f".write_test_{uuid.uuid4()}")
+        try:
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+        except:
+            can_write = False
+
+        if is_protected or not can_write:
+            # Relaunch silently as administrator
+            run_as_admin()
 
     def show_admin_elevation_ui(self):
         """Show a button to restart the launcher with administrative privileges."""
@@ -405,6 +427,13 @@ class EldenRingLauncher(ctk.CTk):
         self.lang_var.set(lang_code)
         self.save_config_value("language", lang_code)
         self.setup_ui() # Refresh UI
+        self.show_main_view()
+        self.check_for_modpack_updates() # Re-check on lang change just in case
+        
+        # Trigger a status update to refresh chat/player list data after UI is ready
+        if self.chat_socket:
+            self.after(300, self.broadcast_status)
+            self.after(300, self.request_chat_data)
 
     def setup_ui(self):
         # Clear existing widgets if any (for re-init)
@@ -429,6 +458,7 @@ class EldenRingLauncher(ctk.CTk):
             self.show_setup_view()
         else:
             self.show_main_view()
+        self.check_for_modpack_updates() # Check updates immediately after setup
             
         # Language Selector outside the frames (only during setup)
         if not self.game_dir:
@@ -588,7 +618,7 @@ class EldenRingLauncher(ctk.CTk):
             self.after(0, lambda: self.setup_status.configure(text=text))
 
     def update_status(self, text, color="gray"):
-        if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+        if hasattr(self, 'status_label') and self.status_label and self.status_label.winfo_exists():
             self.after(0, lambda: self.status_label.configure(text=text, text_color=color))
 
     def manual_browse(self):
@@ -652,6 +682,7 @@ class EldenRingLauncher(ctk.CTk):
                         continue
                         
                     try:
+                        import shutil
                         shutil.move(item_path, new_path)
                     except Exception as move_err:
                         print(f"Warning: Could not move {item}: {move_err}")
@@ -716,6 +747,14 @@ class EldenRingLauncher(ctk.CTk):
             self.error_admin_btn.pack(pady=10)
 
     def show_bootstrap_ui(self, path):
+        # Hide main view frames if they exist
+        if hasattr(self, 'content_frame'): self.content_frame.place_forget()
+        if hasattr(self, 'sidebar_frame'): self.sidebar_frame.place_forget()
+        
+        # Ensure overlay is visible
+        self.overlay.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.85, relheight=0.9)
+        self.overlay.configure(fg_color="#151515", border_width=1)
+
         # Clear overlay for bootstrap
         for widget in self.overlay.winfo_children():
             widget.destroy()
@@ -737,76 +776,38 @@ class EldenRingLauncher(ctk.CTk):
         
         threading.Thread(target=self.run_bootstrap, args=(path,), daemon=True).start()
 
+    def update_bootstrap_status(self, text):
+        if hasattr(self, 'bootstrap_label') and self.bootstrap_label.winfo_exists():
+            self.after(0, lambda: self.bootstrap_label.configure(text=text))
+
     def run_bootstrap(self, path):
         url = "https://github.com/conan513/er_launcher/releases/download/v1/spp_er.zip"
         temp_zip = os.path.join(path, "spp_er_temp.zip")
+        # Pre-cleanup
+        if os.path.exists(temp_zip):
+            try: os.remove(temp_zip)
+            except: pass
         self.bootstrap_debug_log = [f"Target URL: {url}", f"Target Path: {path}"]
         
         try:
             self.update_bootstrap_status(self._t("downloading"))
-            self.after(0, lambda: self.progress_bar.set(0.1))
+            self.after(0, lambda: self.progress_bar.set(0.0))
             
-            # 1. Try CURL
-            download_success = False
-            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-            try:
-                self.bootstrap_debug_log.append("Attempt 1: curl...")
-                cmd = f'curl -L -k -A "{ua}" -o "{temp_zip}" "{url}"'
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                if result.returncode == 0 and self.validate_zip(temp_zip):
-                    download_success = True
-                else:
-                    self.bootstrap_debug_log.append(f"curl failed. ReturnCode: {result.returncode}")
-                    if result.stderr: self.bootstrap_debug_log.append(f"curl stderr: {result.stderr[:200]}")
-            except Exception as e:
-                self.bootstrap_debug_log.append(f"curl Exception: {str(e)}")
+            # Helper to update bootstrap UI
+            def update_bootstrap_ui(percent, text):
+                if hasattr(self, 'progress_bar') and self.progress_bar.winfo_exists():
+                    self.after(0, lambda: self.progress_bar.set(percent))
+                if hasattr(self, 'bootstrap_label') and self.bootstrap_label.winfo_exists():
+                    self.after(0, lambda: self.bootstrap_label.configure(text=text))
 
-            # 2. Try PowerShell BITS
-            if not download_success:
-                try:
-                    self.update_bootstrap_status(self._t("retry_bits"))
-                    self.after(0, lambda: self.progress_bar.set(0.3))
-                    self.bootstrap_debug_log.append("Attempt 2: Start-BitsTransfer...")
-                    if os.path.exists(temp_zip): os.remove(temp_zip)
-                    ps_cmd = f"powershell -Command \"Start-BitsTransfer -Source '{url}' -Destination '{temp_zip}'\""
-                    result = subprocess.run(ps_cmd, shell=True, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                    if result.returncode == 0 and self.validate_zip(temp_zip):
-                        download_success = True
-                    else:
-                        self.bootstrap_debug_log.append(f"BITS failed. ReturnCode: {result.returncode}")
-                        if result.stderr: self.bootstrap_debug_log.append(f"BITS stderr: {result.stderr[:200]}")
-                except Exception as e:
-                    self.bootstrap_debug_log.append(f"BITS Exception: {str(e)}")
-
-            # 3. Try PowerShell standard fallback
-            if not download_success:
-                try:
-                    self.update_bootstrap_status(self._t("retry_web"))
-                    self.after(0, lambda: self.progress_bar.set(0.5))
-                    self.bootstrap_debug_log.append("Attempt 3: System.Net.WebClient...")
-                    if os.path.exists(temp_zip): os.remove(temp_zip)
-                    ps_cmd = f"powershell -Command \"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('{url}', '{temp_zip}')\""
-                    result = subprocess.run(ps_cmd, shell=True, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                    if result.returncode == 0 and self.validate_zip(temp_zip):
-                        download_success = True
-                    else:
-                        self.bootstrap_debug_log.append(f"WebClient failed. ReturnCode: {result.returncode}")
-                        if result.stderr: self.bootstrap_debug_log.append(f"WebClient stderr: {result.stderr[:200]}")
-                except Exception as e:
-                    self.bootstrap_debug_log.append(f"WebClient Exception: {str(e)}")
-
-            if not download_success:
-                error_msg = self._t("download_failed")
-                if os.path.exists(temp_zip):
-                    try:
-                        with open(temp_zip, 'rb') as f:
-                            leak = f.read(100)
-                            self.bootstrap_debug_log.append(f"Downloaded content teaser: {leak}")
-                    except: pass
-                raise Exception(error_msg)
+            # Use the new progress-enabled downloader
+            if self.download_file_with_progress(url, temp_zip, progress_callback=update_bootstrap_ui):
+                 self.bootstrap_debug_log.append("Download successful via urllib.")
+            else:
+                 raise Exception("Download failed.")
 
             self.update_bootstrap_status(self._t("extracting"))
-            self.after(0, lambda: self.progress_bar.set(0.8))
+            self.after(0, lambda: self.progress_bar.set(0.95))
             
             with zipfile.ZipFile(temp_zip, 'r') as z:
                 z.extractall(path)
@@ -831,6 +832,7 @@ class EldenRingLauncher(ctk.CTk):
             self.after(0, lambda: self.add_retry_button(path))
             self.after(0, self.show_debug_log) # Auto-show on failure
 
+
     def validate_zip(self, file_path):
         """ Checks if file is a valid ZIP (starts with PK and size > 1MB) """
         try:
@@ -851,9 +853,6 @@ class EldenRingLauncher(ctk.CTk):
         except Exception as e:
             self.bootstrap_debug_log.append(f"Validation Exception: {str(e)}")
             return False
-
-    def update_bootstrap_status(self, text):
-        self.after(0, lambda: self.bootstrap_label.configure(text=text))
 
     def add_retry_button(self, path):
         btn_frame = ctk.CTkFrame(self.overlay, fg_color="transparent")
@@ -892,6 +891,11 @@ class EldenRingLauncher(ctk.CTk):
     def finish_setup_after_bootstrap(self, path):
         self.save_config(path)
         self.setup_ui()
+        
+        # Refresh player list and chat after bootstrap UI reset
+        if self.chat_socket:
+            self.after(500, self.broadcast_status)
+            self.after(500, self.request_chat_data)
 
     def show_main_view(self):
         # Hide the setup overlay
@@ -978,46 +982,15 @@ class EldenRingLauncher(ctk.CTk):
         self.modpack_var.set(current_mod)
         
         self.mod_selector = ctk.CTkSegmentedButton(self.mod_frame, 
-                                                   values=[self._t("vanilla"), self._t("qol"), self._t("diablo")],
+                                                   values=[self._t("vanilla"), self._t("reforged"), self._t("qol"), self._t("diablo")],
                                                    variable=self.modpack_var,
                                                    command=self.on_modpack_change,
                                                    fg_color="#1a1a1a")
         self.mod_selector.pack(padx=20)
 
-        # Launch Buttons
-        self.button_frame = ctk.CTkFrame(self.tab_play, fg_color="transparent")
-        self.button_frame.pack(pady=15)
+        # Launch Buttons (conditionally shown based on Reforged installation)
+        self.refresh_launch_buttons()
 
-        # Seamless Column
-        self.seamless_col = ctk.CTkFrame(self.button_frame, fg_color="transparent")
-        self.seamless_col.pack(side="left", padx=10)
-
-        self.seamless_btn = ctk.CTkButton(self.seamless_col, text=self._t("seamless_btn"), 
-                                          command=self.launch_seamless,
-                                          height=45, width=180,
-                                          font=("Arial", 14, "bold"),
-                                          fg_color="#3e4a3d", hover_color="#4e5b4d",
-                                          border_width=1, border_color="#d4af37")
-        self.seamless_btn.pack()
-        
-        self.seamless_desc = ctk.CTkLabel(self.seamless_col, text=self._t("seamless_desc"), 
-                                          font=("Arial", 9), text_color="#aaaaaa")
-        self.seamless_desc.pack(pady=(5, 0))
-
-        # Online Column
-        self.online_col = ctk.CTkFrame(self.button_frame, fg_color="transparent")
-        self.online_col.pack(side="left", padx=10)
-
-        self.online_btn = ctk.CTkButton(self.online_col, text=self._t("online_btn"), 
-                                        command=self.launch_online,
-                                        height=45, width=180,
-                                        font=("Arial", 14, "bold"),
-                                        fg_color="#1a1a1a", border_width=2, border_color="#d4af37")
-        self.online_btn.pack()
-
-        self.online_desc = ctk.CTkLabel(self.online_col, text=self._t("online_desc"), 
-                                        font=("Arial", 9), text_color="#aaaaaa")
-        self.online_desc.pack(pady=(5, 0))
 
         # Save Converter Section (Moved here for better visibility)
         self.conv_frame = ctk.CTkFrame(self.tab_play, fg_color="transparent")
@@ -1103,13 +1076,31 @@ class EldenRingLauncher(ctk.CTk):
                        fg_color="#1a1a1a", hover_color="#3e4a3d",
                        text_color="#aaaaaa").pack(pady=10)
 
+        # Admin Status info
+        if is_admin():
+            admin_info_frame = ctk.CTkFrame(self.tab_tools, fg_color="#1a1a1a", border_width=1, border_color="#d4af37")
+            admin_info_frame.pack(pady=20, padx=30, fill="x")
+            
+            ctk.CTkLabel(admin_info_frame, text=f"🛡️ {self._t('elevated_privileges')}", 
+                         font=("Arial", 12, "bold"), text_color="#d4af37").pack(pady=(10, 5))
+            
+            ctk.CTkLabel(admin_info_frame, text=self._t("admin_explanation"), 
+                         font=("Arial", 10), text_color="#aaaaaa", wraplength=400).pack(pady=(0, 10))
+
+        # Modpack Update Debug/Manual Button
+        ctk.CTkButton(self.tab_tools, text="🔄 Check for Modpack Updates",
+                      command=self.check_for_modpack_updates,
+                      height=30, width=250,
+                      fg_color="#1a1a1a", hover_color="#333333",
+                      text_color="#aaaaaa").pack(pady=10)
+
         # --- ABOUT TAB ---
         self.setup_about_tab()
 
         # --- MOD SETTINGS TAB (conditionally shown) ---
-        # Check if QoL or Diablo is selected and add tab
+        # Check if Reforged, QoL or Diablo is selected and add tab
         current_mod = self.read_config_value('modpack', "Vanilla")
-        if current_mod in ["Quality of Life", "Diablo Loot (RNG)"]:
+        if current_mod in ["Reforged", "Quality of Life", "Diablo Loot (RNG)"]:
             self.create_mod_settings_tab()
 
         # Footer Frame (Status + Update Button)
@@ -1126,6 +1117,9 @@ class EldenRingLauncher(ctk.CTk):
         # Status Label (Inside the footer)
         self.status_label = ctk.CTkLabel(self.footer_frame, text="", text_color="gray", font=("Arial", 11), wraplength=480)
         self.status_label.pack(side="bottom")
+
+        # Sync modpack settings with actual file state on startup
+        self.sync_modpack_settings()
 
     def toggle_chat(self):
         """Toggle chat visibility and resize window."""
@@ -1229,21 +1223,34 @@ class EldenRingLauncher(ctk.CTk):
         ctk.CTkLabel(col1_frame, text=self._t("disable_sharpening_desc"),
                      font=("Arial", 8), text_color="#888888", justify="left").pack(anchor="w", padx=(25, 0), pady=(0, 5))
         
-        # Update FPS limit visibility and Map checkbox
-        self.update_fps_limit_visibility()
-        self.update_map_checkbox_state()
+        # Update mod settings availability
+        self.update_mod_settings_availability()
 
-    def update_map_checkbox_state(self):
-        """Enable/disable Map checkbox based on current modpack."""
+    def update_mod_settings_availability(self):
+        """Enable/disable mod toggles based on current modpack restrictions."""
+        if not hasattr(self, 'qol_map_cb') or not self.qol_map_cb.winfo_exists():
+            return
+            
         current_modpack = self.read_config_value('modpack', "Vanilla")
         
-        if current_modpack == "Diablo Loot (RNG)":
-            # Disable checkbox and force it to enabled for Diablo
+        if current_modpack == "Reforged":
+            # For Reforged: Only FPS & Sharpening allowed. Quest Log & Map forced OFF and LOCKED.
+            self.qol_questlog_var.set(False)
+            self.qol_questlog_cb.configure(state="disabled")
+            self.qol_map_var.set(False)
+            self.qol_map_cb.configure(state="disabled")
+        elif current_modpack == "Diablo Loot (RNG)":
+            # For Diablo: Map forced ON and LOCKED. Quest Log is free.
+            self.qol_questlog_cb.configure(state="normal")
             self.qol_map_var.set(True)
             self.qol_map_cb.configure(state="disabled")
         else:
-            # Enable checkbox for QoL
+            # For QoL: Everything is free.
+            self.qol_questlog_cb.configure(state="normal")
             self.qol_map_cb.configure(state="normal")
+            
+        # Also refresh FPS limit visibility which relates to availability
+        self.update_fps_limit_visibility()
 
     def on_qol_fps_toggle_change(self):
         """Called when FPS Unlocker toggle is changed."""
@@ -1324,6 +1331,7 @@ class EldenRingLauncher(ctk.CTk):
         
         # Determine current mod folder based on selected modpack
         pack_map = {
+            "Reforged": "mod_err",
             "Quality of Life": "mod_qol",
             "Diablo Loot (RNG)": "mod_rng"
         }
@@ -1488,7 +1496,9 @@ class EldenRingLauncher(ctk.CTk):
         # Reset color tags state since we are creating a fresh text widget
         if hasattr(self, 'created_color_tags'):
             del self.created_color_tags
-
+        if hasattr(self, 'plist_tags'):
+            del self.plist_tags
+            
         # Top Frame for Nickname & Status (Side-by-side for space)
         header_frame = ctk.CTkFrame(parent, fg_color="transparent")
         header_frame.pack(fill="x", padx=10, pady=(5, 2))
@@ -1515,23 +1525,30 @@ class EldenRingLauncher(ctk.CTk):
                 self.broadcast_status()
         self.chat_nick_entry.bind("<FocusOut>", on_nick_focus_out)
 
-        # Online Players List (More compact)
-        self.player_list_label = ctk.CTkLabel(parent, text=self._t("chat_online_players"), font=("Arial", 10, "bold"), text_color="#d4af37")
-        self.player_list_label.pack(side="top", anchor="w", padx=15, pady=(2, 0))
+        # Online Players List Header
+        self.player_list_header_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.player_list_header_frame.pack(side="top", fill="x", padx=15, pady=(2, 0))
         
-        self.player_list_box = ctk.CTkTextbox(parent, height=60, state="disabled", wrap="word", font=("Segoe UI Emoji", 10), fg_color="#0d0d0d", border_width=1, border_color="#333333")
-        self.player_list_box.pack(fill="x", padx=10, pady=(2, 5))
+        self.player_list_label = ctk.CTkLabel(self.player_list_header_frame, text=self._t("chat_online_players"), font=("Arial", 10, "bold"), text_color="#d4af37")
+        self.player_list_label.pack(side="left")
+        
+        self.playtime_header_label = ctk.CTkLabel(self.player_list_header_frame, text=self._t("playtime_header"), font=("Arial", 8, "bold"), text_color="#aaaaaa")
+        self.playtime_header_label.pack(side="right")
+        
+        self.player_list_box = ctk.CTkTextbox(parent, height=60, state="disabled", wrap="word", font=("Segoe UI Emoji", 10), fg_color="#0d0d0d", text_color="#cccccc", border_width=1, border_color="#333333")
+        self.player_list_box.pack(fill="x", padx=10, pady=(0, 5))
+        try:
+            # Add a right-aligned tab stop at the end of the line
+            self.player_list_box._textbox.configure(tabs=('260', 'right'))
+        except: pass
 
         # Chat History
         self.chat_history = ctk.CTkTextbox(parent, state="disabled", wrap="word", font=("Segoe UI Emoji", 11), fg_color="#0d0d0d")
         self.chat_history.pack(fill="both", expand=True, padx=10, pady=(2, 5))
         
-        # Request full history from server if we are reconnecting UI
-        if self.chat_socket and hasattr(self, 'send_queue'):
-            try:
-                self.send_queue.put(json.dumps({"type": "request_history"}))
-            except Exception as e:
-                print(f"Error requesting history: {e}")
+        # Request full history and player list from server with a slight delay to ensure UI is mapped
+        if self.chat_socket:
+            self.after(200, self.request_chat_data)
         
         # --- Sidebar Settings (Always on Top & Opacity) ---
         sidebar_settings_frame = ctk.CTkFrame(parent, fg_color="#111111", corner_radius=5)
@@ -1826,6 +1843,15 @@ class EldenRingLauncher(ctk.CTk):
 
         asyncio.run(run())
 
+    def request_chat_data(self):
+        """Request history and player list from server."""
+        if self.chat_socket and hasattr(self, 'send_queue'):
+            try:
+                self.send_queue.put(json.dumps({"type": "request_history"}))
+                self.send_queue.put(json.dumps({"type": "request_player_list"}))
+            except Exception as e:
+                print(f"Error requesting chat data on UI refresh: {e}")
+
     def send_chat_message(self):
         """Send a message from the input field to the server."""
         from tkinter import messagebox
@@ -1866,26 +1892,94 @@ class EldenRingLauncher(ctk.CTk):
             self.last_send_time = now # Update cooldown
             self.chat_input.delete(0, 'end')
 
+    def render_player_list(self, players):
+        if hasattr(self, 'player_list_box') and self.player_list_box.winfo_exists():
+            self.player_list_box.configure(state="normal")
+            self.player_list_box.delete("1.0", "end")
+            for p in players:
+                nick = p.get("nickname", "Unknown")
+                mod = p.get("modpack", "Vanilla")
+                in_game = p.get("in_game", False)
+                mode = p.get("game_mode", "Online")
+                color = p.get("color", "gray")
+                
+                # Use a clean tag name for color
+                clean_color = color.replace("#", "")
+                tag_name = f"plist_{clean_color}"
+                
+                if not hasattr(self, 'plist_tags'):
+                    self.plist_tags = set()
+                
+                if tag_name not in self.plist_tags:
+                    self.player_list_box.tag_config(tag_name, foreground=color)
+                    self.plist_tags.add(tag_name)
+                
+                # Configure a subtle tag for tripcodes if not exists
+                if "tripcode_tag" not in self.plist_tags:
+                    self.player_list_box.tag_config("tripcode_tag", foreground="#888888") # Muted gray
+                    self.plist_tags.add("tripcode_tag")
+                
+                # Status Text (Compact Format)
+                if in_game:
+                    # Abbreviate mod names
+                    short_mod = mod
+                    if mod == "Quality of Life": short_mod = "QoL"
+                    elif mod == "Diablo Loot (RNG)": short_mod = "Diablo"
+                    
+                    mode_key = "mode_seamless" if mode == "Seamless" else "mode_online"
+                    info_text = f" ({short_mod} - {self._t(mode_key)})"
+                else:
+                    status_text = self._t("status_launcher")
+                    info_text = f" [{status_text}]"
+                
+                self.player_list_box.insert("end", f"• {nick}", tag_name)
+                
+                # Add tripcode if available
+                trip = p.get("tripcode", "")
+                if trip:
+                    self.player_list_box.insert("end", f" #{trip}", "tripcode_tag")
+                
+                # Add status info (Stay on left)
+                self.player_list_box.insert("end", info_text)
+
+                # Add playtime if available (Push to right)
+                playtime = p.get("playtime", "")
+                if playtime:
+                     # Use \t to push it to the right-aligned tab stop
+                     self.player_list_box.insert("end", f"\t[{playtime}]", "tripcode_tag")
+
+                self.player_list_box.insert("end", "\n")
+            self.player_list_box.configure(state="disabled")
+
     def receive_chat_messages(self):
         """Poll the chat queue and update the UI."""
         if not hasattr(self, 'online_count'):
             self.online_count = 0
             
+        # Safety check: Don't pop if UI is being rebuilt or not ready (need both widgets)
+        if not hasattr(self, 'chat_history') or not self.chat_history.winfo_exists() or \
+           not hasattr(self, 'player_list_box') or not self.player_list_box.winfo_exists():
+            self.after(200, self.receive_chat_messages)
+            return
+
         try:
-            while True:
+            while not self.chat_queue.empty():
+                # Re-check UI readiness inside loop
+                if not self.chat_history.winfo_exists() or not self.player_list_box.winfo_exists():
+                    break
+
                 try:
                     data = self.chat_queue.get_nowait()
                 except queue.Empty:
                     break
 
-                # Safety check: Ensure UI elements exist before updating
-                if not hasattr(self, 'chat_history') or not self.chat_history.winfo_exists():
-                    continue
-
                 if data["type"] == "status":
                     if data["connected"]:
                         if self.chat_status_label.winfo_exists():
                             self.chat_status_label.configure(text=self._t("chat_connected"), text_color="green")
+                        
+                        # Ensure server knows our user_id immediately upon connection
+                        self.broadcast_status()
                         
                         # Show welcome message upon connection
                         if not hasattr(self, '_welcome_shown'):
@@ -1901,9 +1995,10 @@ class EldenRingLauncher(ctk.CTk):
                         # Send initial status update immediately after connection
                         self.broadcast_status()
                         
-                        # Also request history
+                        # Also request history and player list
                         if hasattr(self, 'send_queue'):
                             self.send_queue.put(json.dumps({"type": "request_history"}))
+                            self.send_queue.put(json.dumps({"type": "request_player_list"}))
 
                     else:
                         if self.chat_status_label.winfo_exists():
@@ -1920,43 +2015,8 @@ class EldenRingLauncher(ctk.CTk):
                         self.player_list_label.configure(text=f"{self._t('chat_online_players')} ({self.online_count})")
                 
                 elif data["type"] == "player_list":
-                    if hasattr(self, 'player_list_box') and self.player_list_box.winfo_exists():
-                        self.player_list_box.configure(state="normal")
-                        self.player_list_box.delete("1.0", "end")
-                        for p in data.get("players", []):
-                            nick = p.get("nickname", "Unknown")
-                            mod = p.get("modpack", "Vanilla")
-                            in_game = p.get("in_game", False)
-                            mode = p.get("game_mode", "Online")
-                            color = p.get("color", "gray")
-                            
-                            # Use a clean tag name for color
-                            clean_color = color.replace("#", "")
-                            tag_name = f"plist_{clean_color}"
-                            
-                            if not hasattr(self, 'plist_tags'):
-                                self.plist_tags = set()
-                            
-                            if tag_name not in self.plist_tags:
-                                self.player_list_box.tag_config(tag_name, foreground=color)
-                                self.plist_tags.add(tag_name)
-                            
-                            # Status Text (Compact Format)
-                            if in_game:
-                                # Abbreviate mod names
-                                short_mod = mod
-                                if mod == "Quality of Life": short_mod = "QoL"
-                                elif mod == "Diablo Loot (RNG)": short_mod = "Diablo"
-                                
-                                mode_key = "mode_seamless" if mode == "Seamless" else "mode_online"
-                                info_text = f" ({short_mod} - {self._t(mode_key)})"
-                            else:
-                                status_text = self._t("status_launcher")
-                                info_text = f" [{status_text}]"
-                            
-                            self.player_list_box.insert("end", f"• {nick}", tag_name)
-                            self.player_list_box.insert("end", f"{info_text}\n")
-                        self.player_list_box.configure(state="disabled")
+                    players = data.get("players", [])
+                    self.render_player_list(players)
 
                 elif data["type"] == "history":
                     self.chat_history.configure(state="normal")
@@ -2066,6 +2126,12 @@ class EldenRingLauncher(ctk.CTk):
         except Exception as e:
             print(f"[ERROR] monitor_process exception: {e}")
         
+        # Periodic forced broadcast (every 60s) to keep player list alive
+        now = time.time()
+        if now - getattr(self, 'last_broadcast_time', 0) > 60:
+            self.broadcast_status()
+            self.last_broadcast_time = now
+        
         # Check every 2 seconds
         self.after(2000, self.monitor_process)
 
@@ -2158,35 +2224,36 @@ class EldenRingLauncher(ctk.CTk):
             return False
 
     def is_game_running(self):
-        try:
-            # Check for eldenring.exe in the process list
-            output = subprocess.check_output('tasklist /FI "IMAGENAME eq eldenring.exe" /NH', shell=True).decode('utf-8', errors='ignore')
-            return "eldenring.exe" in output.lower()
-        except:
-            return False
+        """Check if eldenring.exe is running using psutil (KISS)."""
+        import psutil
+        for proc in psutil.process_iter(['name']):
+            try:
+                if proc.info['name'].lower() == "eldenring.exe":
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+        return False
 
     def get_game_pid(self):
-        """Find the PID of eldenring.exe, prioritizing our own game_process."""
-        try:
-            if hasattr(self, 'game_process') and self.game_process:
-                if self.game_process.poll() is None:
-                    return self.game_process.pid
+        """Find the PID of eldenring.exe using psutil."""
+        if hasattr(self, 'game_process') and self.game_process:
+            if self.game_process.poll() is None:
+                return self.game_process.pid
 
-            output = subprocess.check_output('tasklist /FI "IMAGENAME eq eldenring.exe" /NH /FO CSV', shell=True).decode('utf-8', errors='ignore')
-            if "eldenring.exe" in output.lower():
-                import csv
-                reader = csv.reader(io.StringIO(output))
-                for row in reader:
-                    if row and row[0].lower() == "eldenring.exe":
-                        return int(row[1])
-        except Exception as e:
-            pass
+        import psutil
+        for proc in psutil.process_iter(['name', 'pid']):
+            try:
+                if proc.info['name'].lower() == "eldenring.exe":
+                    return proc.info['pid']
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
         return None
 
     def on_modpack_change(self, value):
         # Map translated value back to internal key
         internal_key = "Vanilla"
-        if value == self._t("qol"): internal_key = "Quality of Life"
+        if value == self._t("reforged"): internal_key = "Reforged"
+        elif value == self._t("qol"): internal_key = "Quality of Life"
         elif value == self._t("diablo"): internal_key = "Diablo Loot (RNG)"
         
         self.save_config_value("modpack", internal_key)
@@ -2194,13 +2261,13 @@ class EldenRingLauncher(ctk.CTk):
         self.update_save_converter_state()
         
         # Handle Mod Settings tab visibility
-        if internal_key in ["Quality of Life", "Diablo Loot (RNG)"]:
+        if internal_key in ["Reforged", "Quality of Life", "Diablo Loot (RNG)"]:
             # Show Mod Settings tab if not already present
             if not hasattr(self, 'tab_mod_settings') or self.tab_mod_settings not in self.tabview._tab_dict.values():
                 self.create_mod_settings_tab()
             else:
-                # Tab already exists, just update Map checkbox state
-                self.update_map_checkbox_state()
+                # Tab already exists, just update availability
+                self.update_mod_settings_availability()
         else:
             # Hide Mod Settings tab if present
             if hasattr(self, 'tab_mod_settings'):
@@ -2226,6 +2293,11 @@ class EldenRingLauncher(ctk.CTk):
                 "in_game": self.is_game_running(),
                 "game_mode": getattr(self, 'last_game_mode', "Online")
             }, ensure_ascii=False))
+        
+        # Refresh launch buttons to show download button if Reforged not installed
+        if hasattr(self, 'tab_play') and self.tab_play.winfo_exists():
+            self.refresh_launch_buttons()
+
 
     def apply_modpack(self, pack_name):
         if not self.game_dir or not os.path.exists(self.game_dir):
@@ -2235,6 +2307,7 @@ class EldenRingLauncher(ctk.CTk):
         # Mapping names to folder-friendly IDs
         pack_map = {
             "Vanilla": "vanilla",
+            "Reforged": "reforged",
             "Quality of Life": "qol",
             "Diablo Loot (RNG)": "diablo"
         }
@@ -2272,13 +2345,16 @@ class EldenRingLauncher(ctk.CTk):
         
         # Determine internal key
         internal_key = "Vanilla"
-        if current_val == self._t("qol"): internal_key = "Quality of Life"
+        if current_val == self._t("reforged"): internal_key = "Reforged"
+        elif current_val == self._t("qol"): internal_key = "Quality of Life"
         elif current_val == self._t("diablo"): internal_key = "Diablo Loot (RNG)"
+        elif current_val == "Reforged": internal_key = "Reforged"
         elif current_val == "Quality of Life": internal_key = "Quality of Life" # Handle internal key if set directly
         elif current_val == "Diablo Loot (RNG)": internal_key = "Diablo Loot (RNG)"
 
         # Determine current mod folder based on internal key
         pack_map = {
+            "Reforged": "mod_err",
             "Quality of Life": "mod_qol",
             "Diablo Loot (RNG)": "mod_rng"
         }
@@ -2333,7 +2409,9 @@ class EldenRingLauncher(ctk.CTk):
         dll_str = '["' + '", "'.join(dlls) + '"]'
         
         # Determine mod folder based on pack name
-        if pack_name == "Quality of Life":
+        if pack_name == "Reforged":
+            mod_folder = "mod_err"
+        elif pack_name == "Quality of Life":
             mod_folder = "mod_qol"
         elif pack_name == "Diablo Loot (RNG)":
             mod_folder = "mod_rng"
@@ -2341,7 +2419,9 @@ class EldenRingLauncher(ctk.CTk):
             mod_folder = "modpack"  # fallback
         
         # Build mod config
-        mod_enabled = "true" if self.qol_map_var.get() else "false"
+        # Modpacks should ALWAYS be enabled if they are selected.
+        # Individual sub-mods (map/questlog) are handled via their own config/DLL logic.
+        mod_enabled = "true" 
         mods_str = f'[{{ enabled = {mod_enabled}, name = "{mod_folder}", path = "{mod_folder}" }}]'
         
         return {
@@ -2360,6 +2440,7 @@ class EldenRingLauncher(ctk.CTk):
                 "dlls": '["ersc.dll", "Scripts-Data-Exposer-FS.dll", "waygate_client.dll"]',
                 "mods": '[{ enabled = false, name = "modpack", path = "modpack" }]'
             },
+            "Reforged": self.get_mod_config("Reforged"),
             "Quality of Life": self.get_mod_config("Quality of Life"),
             "Diablo Loot (RNG)": self.get_mod_config("Diablo Loot (RNG)")
         }
@@ -2407,26 +2488,57 @@ class EldenRingLauncher(ctk.CTk):
 
 
     def update_save_converter_state(self):
-        """Restore save converter state (enabled for all modes including Vanilla)."""
+        """Restore save converter state (Enabled only for Vanilla)."""
         current_mod = self.modpack_var.get()
+        is_vanilla = (current_mod == self._t("vanilla") or current_mod == "Vanilla")
+        
+        if hasattr(self, 'conv_frame') and self.conv_frame.winfo_exists():
+            if is_vanilla:
+                # Re-pack if hidden. Need to find the preceding element to maintain order.
+                # In show_main_view it follows refresh_launch_buttons (button_frame).
+                # But button_frame is recreated often. Let's just pack it.
+                self.conv_frame.pack(pady=(20, 0), padx=30, fill="x")
+            else:
+                self.conv_frame.pack_forget()
+
         saved_val = self.read_config_value("auto_save_converter", "0")
         self.conv_var.set(saved_val)
-        self.conv_checkbox.configure(state="normal", text_color="#d4af37")
 
     def handle_save_conversion(self, mode):
         """Rename all save files (ER0000-ER0009, .mod, and .bak) between .sl2 and .co2 extensions."""
-        if self.read_config_value("auto_save_converter", "0") != "1":
-            return True
-
         save_folder = self.get_steam_id64()
         if not save_folder or not os.path.exists(save_folder):
-            self.update_status(self._t("save_folder_not_found"), "#ff4444")
-            return False
+            return True
 
-        self.update_status(self._t("converting_saves"), "#d4af37")
-        
         try:
             files = os.listdir(save_folder)
+            
+            # --- 1. ALWAYS rename .mod.co2 -> .mod (Requested) ---
+            mod_count = 0
+            for f in files:
+                if f.lower().endswith(".mod.co2"):
+                    old_path = os.path.join(save_folder, f)
+                    new_f = f[:-4] # Remove .co2
+                    new_path = os.path.join(save_folder, new_f)
+                    try:
+                        if os.path.exists(new_path): os.remove(new_path)
+                        os.rename(old_path, new_path)
+                        mod_count += 1
+                    except Exception as e:
+                        print(f"Error auto-renaming {f}: {e}")
+            
+            if mod_count > 0:
+                print(f"Auto-renamed {mod_count} .mod.co2 files to .mod")
+
+            # --- 2. RESTRICT .sl2 <-> .co2 to Vanilla + Checkbox ---
+            current_mod = self.modpack_var.get()
+            if current_mod != self._t("vanilla") and current_mod != "Vanilla":
+                return True # Skip for other modpacks
+
+            if self.read_config_value("auto_save_converter", "0") != "1":
+                return True
+
+            self.update_status(self._t("converting_saves"), "#d4af37")
             count = 0
             
             for f in files:
@@ -2484,15 +2596,18 @@ class EldenRingLauncher(ctk.CTk):
             # Get current modpack internal key
             val = self.modpack_var.get()
             internal_key = "Vanilla"
-            if val == self._t("qol"): internal_key = "Quality of Life"
+            if val == self._t("reforged"): internal_key = "Reforged"
+            elif val == self._t("qol"): internal_key = "Quality of Life"
             elif val == self._t("diablo"): internal_key = "Diablo Loot (RNG)"
+            elif val == "Reforged": internal_key = "Reforged"
             
             payload = json.dumps({
                 "type": "status_update",
                 "nickname": nick,
                 "modpack": internal_key,
                 "in_game": self.is_game_running(),
-                "game_mode": getattr(self, 'last_game_mode', "Online")
+                "game_mode": getattr(self, 'last_game_mode', "Online"),
+                "user_id": self.chat_user_id
             }, ensure_ascii=False)
             self.send_queue.put(payload)
         except Exception as e:
@@ -2537,11 +2652,372 @@ class EldenRingLauncher(ctk.CTk):
         else:
             self.update_status(self._t("exe_not_found"), "#ff4444")
 
+    def is_reforged_installed(self):
+        """Check if mod_err folder exists in game directory."""
+        if not self.game_dir:
+            return False
+        mod_err_path = os.path.join(self.game_dir, "mod_err")
+        return os.path.exists(mod_err_path) and os.path.isdir(mod_err_path)
+
+    def download_file_with_progress(self, url, dest_path, progress_callback=None):
+        """Standard download logic with cache-busting and progress reporting."""
+        try:
+            # 1. Add cache-busting timestamp to URL
+            cache_sep = "&" if "?" in url else "?"
+            busted_url = f"{url}{cache_sep}t={int(time.time())}"
+            
+            print(f"[DOWNLOAD] Starting: {busted_url}")
+            
+            # 2. Cleanup existing file to ensure fresh download
+            if os.path.exists(dest_path):
+                try: os.remove(dest_path)
+                except: pass
+
+            req = urllib.request.Request(busted_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ERLauncher'})
+            with urllib.request.urlopen(req, timeout=30) as response:
+                total_size = int(response.info().get('Content-Length', 0))
+                downloaded_size = 0
+                block_size = 65536 # 64KB chunks
+                
+                with open(dest_path, 'wb') as f:
+                    while True:
+                        buffer = response.read(block_size)
+                        if not buffer:
+                            break
+                        downloaded_size += len(buffer)
+                        f.write(buffer)
+                        
+                        if total_size > 0 and progress_callback:
+                            percent = downloaded_size / total_size
+                            progress_callback(percent, f"Downloading... {int(percent*100)}%")
+            
+            # Final verification
+            actual_size = os.path.getsize(dest_path)
+            if total_size > 0 and actual_size != total_size:
+                print(f"[DOWNLOAD] Size mismatch: Expected {total_size}, got {actual_size}")
+                return False
+                
+            return True
+        except Exception as e:
+            print(f"[DOWNLOAD] Failed: {e}")
+            return False
+            print(f"Download error for {url}: {e}")
+            return False
+
+
+    def download_reforged_modpack(self):
+        """Download and extract the 2-part Reforged modpack."""
+        if not self.game_dir:
+            self.update_status(self._t("reforged_download_failed"), "#ff4444")
+            return
+        
+        self.download_in_progress = True
+        
+        # Show progress UI
+        self.show_reforged_download_ui()
+        
+        # Start download in background thread
+        threading.Thread(target=self.run_reforged_download, daemon=True).start()
+
+    def show_reforged_download_ui(self):
+        """Show download progress UI for Reforged modpack."""
+        # Hide launch buttons temporarily
+        if hasattr(self, 'button_frame'):
+            self.button_frame.pack_forget()
+        
+        # Create progress frame if not exists
+        if not hasattr(self, 'reforged_progress_frame') or not self.reforged_progress_frame.winfo_exists():
+            self.reforged_progress_frame = ctk.CTkFrame(self.tab_play, fg_color="transparent")
+            self.reforged_progress_frame.pack(pady=15)
+            
+            self.reforged_status_label = ctk.CTkLabel(self.reforged_progress_frame, 
+                                                       text=self._t("downloading_reforged"),
+                                                       font=("Arial", 12, "bold"), 
+                                                       text_color="#d4af37")
+            self.reforged_status_label.pack(pady=(0, 10))
+            
+            self.reforged_progress_bar = ctk.CTkProgressBar(self.reforged_progress_frame, 
+                                                            width=300, 
+                                                            progress_color="#d4af37")
+            self.reforged_progress_bar.pack(pady=10)
+            self.reforged_progress_bar.set(0)
+        else:
+            # Just ensure it's packed if it was hidden/forgotten
+            self.reforged_progress_frame.pack(pady=15)
+
+        
+    def run_reforged_download(self):
+        """Sequential download and extraction of Reforged modpack (KISS)."""
+        urls = [
+            "https://github.com/conan513/er_launcher/releases/download/v1/mod_err.zip.001",
+            "https://github.com/conan513/er_launcher/releases/download/v1/mod_err.zip.002"
+        ]
+        
+        temp_dir = os.path.join(self.game_dir, "temp_reforged")
+        # Ensure clean start
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        try:
+            # 1. Reset UI
+            if hasattr(self, 'reforged_status_label') and self.reforged_status_label.winfo_exists():
+                checking_text = "Ellenőrzés..." if self.lang_var.get() == "hu" else "Checking..."
+                self.after(0, lambda: self.reforged_status_label.configure(text=f"{checking_text} (0%)"))
+            if hasattr(self, 'reforged_progress_bar') and self.reforged_progress_bar.winfo_exists():
+                self.after(0, lambda: self.reforged_progress_bar.set(0.0))
+
+            downloaded_files = []
+            
+            # 2. Sequential Download
+            for i, url in enumerate(urls):
+                part_num = i + 1
+                dest_file = os.path.join(temp_dir, f"mod_err.zip.{part_num:03d}")
+                
+                # Part 1: 0-50%, Part 2: 50-100%
+                def part_progress_callback(percent, status_text, part_idx=i):
+                    overall = (part_idx * 0.5) + (percent * 0.5)
+                    if hasattr(self, 'reforged_progress_bar') and self.reforged_progress_bar.winfo_exists():
+                        self.after(0, lambda p=overall: self.reforged_progress_bar.set(p))
+                    if hasattr(self, 'reforged_status_label') and self.reforged_status_label.winfo_exists():
+                        txt = f"{self._t('downloading_reforged')} - {int(overall*100)}%"
+                        self.after(0, lambda t=txt: self.reforged_status_label.configure(text=t))
+
+                if not self.download_file_with_progress(url, dest_file, part_progress_callback):
+                    raise Exception(f"Failed to download part {part_num}")
+                downloaded_files.append(dest_file)
+
+            # 3. Universal Extraction (ZIP or 7z)
+            if hasattr(self, 'reforged_status_label') and self.reforged_status_label.winfo_exists():
+                self.after(0, lambda: self.reforged_status_label.configure(text=self._t("extracting_reforged")))
+            if hasattr(self, 'reforged_progress_bar') and self.reforged_progress_bar.winfo_exists():
+                self.after(0, lambda: self.reforged_progress_bar.configure(mode="indeterminate"))
+                self.after(0, self.reforged_progress_bar.start)
+            
+            # Detect archive type by reading the first 2 bytes of the first part
+            is_zip = False
+            with open(downloaded_files[0], 'rb') as f:
+                header = f.read(2)
+                if header == b'PK':
+                    is_zip = True
+                elif header != b'7z' and header != b'7z\xbc\xaf\x27\x1c': # Basic 7z check
+                    # If it's not PK and not obviously 7z, we can try to find 7z more robustly or default
+                    pass
+
+            if is_zip:
+                # Standard ZIP doesn't support split archives natively via zipfile, 
+                # so we concatenate parts manually into one temp file.
+                combined_zip = os.path.join(temp_dir, "combined_modpack.zip")
+                with open(combined_zip, 'wb') as outfile:
+                    for part in downloaded_files:
+                        with open(part, 'rb') as infile:
+                            shutil.copyfileobj(infile, outfile)
+                
+                with zipfile.ZipFile(combined_zip, 'r') as archive:
+                    archive.extractall(path=self.game_dir)
+                
+                if os.path.exists(combined_zip):
+                    os.remove(combined_zip)
+            else:
+                import py7zr
+                # py7zr automatically spans multi-part archives if you point it to the first part (.001)
+                with py7zr.SevenZipFile(downloaded_files[0], mode='r') as archive:
+                    archive.extractall(path=self.game_dir)
+            
+            # 4. Cleanup
+            for f in downloaded_files:
+                if os.path.exists(f): os.remove(f)
+            if hasattr(self, 'reforged_progress_bar') and self.reforged_progress_bar.winfo_exists():
+                self.after(0, self.reforged_progress_bar.stop)
+                self.after(0, lambda: self.reforged_progress_bar.pack_forget())
+
+            self.update_status(self._t("reforged_installed"), "#44ff44")
+            self.download_in_progress = False
+            self.after(1000, self.refresh_launch_buttons)
+            
+        except Exception as e:
+            print(f"Reforged download error: {e}")
+            error_text = f"{self._t('reforged_download_failed')}: {str(e)}"
+            self.update_status(error_text, "#ff4444")
+            self.download_in_progress = False
+            
+            # Update main UI label with error
+            if hasattr(self, 'reforged_status_label') and self.reforged_status_label.winfo_exists():
+                self.after(0, lambda: self.reforged_status_label.configure(text=error_text, text_color="#ff4444"))
+            
+            # Stop and hide progress bar
+            if hasattr(self, 'reforged_progress_bar') and self.reforged_progress_bar.winfo_exists():
+                self.after(0, self.reforged_progress_bar.stop)
+                self.after(0, lambda: self.reforged_progress_bar.pack_forget())
+
+            # Add a retry button directly in the progress frame
+            def add_retry():
+                if hasattr(self, 'reforged_progress_frame') and self.reforged_progress_frame.winfo_exists():
+                    retry_btn = ctk.CTkButton(self.reforged_progress_frame, 
+                                             text=self._t("retry_dl_btn"),
+                                             command=self.download_reforged_modpack,
+                                             fg_color="#3e4a3d", hover_color="#4e5b4d")
+                    retry_btn.pack(pady=10)
+            
+            self.after(0, add_retry)
+            
+            # Cleanup on error
+            try:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+            except:
+                pass
+            
+            # NO LONGER auto-refreshing after 8s to let user read error
+            # self.after(8000, self.refresh_launch_buttons)
+
+
+    def refresh_launch_buttons(self):
+        """Refresh the launch buttons area to show appropriate UI based on Reforged installation."""
+        # Safety check - ensure tab_play exists
+        if not hasattr(self, 'tab_play') or not self.tab_play.winfo_exists():
+            return
+
+        # Determine desired state
+        current_val = self.modpack_var.get()
+        is_reforged = (current_val == self._t("reforged") or current_val == "Reforged")
+        
+        # Check download status
+        if is_reforged and getattr(self, 'download_in_progress', False):
+             desired_mode = "downloading"
+        elif is_reforged and not self.is_reforged_installed():
+             desired_mode = "download"
+        else:
+             desired_mode = "standard"
+        
+        # Check if update is needed
+        if hasattr(self, 'current_launch_mode') and self.current_launch_mode == desired_mode:
+            # Check if update status changed
+            last_update_state = getattr(self, '_last_modpack_update_state', False)
+            current_update_state = getattr(self, 'modpack_update_available', False)
+            
+            if last_update_state == current_update_state:
+                # Check if button frame exists (might have been destroyed externally)
+                if desired_mode == "downloading":
+                     # Ensure progress UI is visible
+                     if hasattr(self, 'reforged_progress_frame') and self.reforged_progress_frame.winfo_exists():
+                         return
+                elif hasattr(self, 'button_frame') and self.button_frame.winfo_exists():
+                    return
+        
+        # Store current update state for next check
+        self._last_modpack_update_state = getattr(self, 'modpack_update_available', False)
+        
+        # Update current mode
+        self.current_launch_mode = desired_mode
+        
+        # Remove progress frame if it exists AND we are NOT downloading
+        if desired_mode != "downloading":
+            if hasattr(self, 'reforged_progress_frame'):
+                try:
+                    if self.reforged_progress_frame.winfo_exists():
+                        self.reforged_progress_frame.destroy()
+                except:
+                    pass
+        
+        # Remove existing button frame and its children
+        if hasattr(self, 'button_frame'):
+            try:
+                if self.button_frame.winfo_exists():
+                    self.button_frame.destroy()
+            except:
+                pass
+        
+        # Also clean up old column frames if they exist
+        for attr in ['seamless_col', 'online_col', 'seamless_btn', 'online_btn', 'seamless_desc', 'online_desc']:
+            if hasattr(self, attr):
+                try:
+                    widget = getattr(self, attr)
+                    if widget.winfo_exists():
+                        widget.destroy()
+                except:
+                    pass
+        
+        if desired_mode == "downloading":
+            # Restore download UI
+            self.show_reforged_download_ui()
+            return
+
+        # Recreate button frame for buttons
+        self.button_frame = ctk.CTkFrame(self.tab_play, fg_color="transparent")
+        
+        # Pack before the Save Converter section if it exists
+        if hasattr(self, 'conv_frame') and self.conv_frame.winfo_exists():
+            self.button_frame.pack(pady=15, before=self.conv_frame)
+        else:
+            self.button_frame.pack(pady=15)
+        
+        if desired_mode == "download":
+            # Show download button
+            download_btn = ctk.CTkButton(self.button_frame, 
+                                         text=self._t("download_reforged"),
+                                         command=self.download_reforged_modpack,
+                                         height=45, width=380,
+                                         font=("Arial", 14, "bold"),
+                                         fg_color="#3e4a3d", hover_color="#4e5b4d",
+                                         border_width=1, border_color="#d4af37")
+            download_btn.pack(pady=10)
+        else:
+            # Check for modpack updates
+            has_update = getattr(self, 'modpack_update_available', False)
+            if has_update:
+                modpack_update_btn = ctk.CTkButton(self.button_frame, 
+                                                  text=self._t("modpack_update_available_btn"),
+                                                  command=self.perform_modpack_update,
+                                                  fg_color="#e15f41", hover_color="#c44569",
+                                                  height=40, width=380,
+                                                  font=("Arial", 12, "bold"))
+                modpack_update_btn.pack(pady=(0, 10))
+
+            # Show normal launch buttons
+            # Seamless Column
+            self.seamless_col = ctk.CTkFrame(self.button_frame, fg_color="transparent")
+            self.seamless_col.pack(side="left", padx=10)
+
+            self.seamless_btn = ctk.CTkButton(self.seamless_col, text=self._t("seamless_btn"), 
+                                              command=self.launch_seamless,
+                                              height=45, width=180,
+                                              font=("Arial", 14, "bold"),
+                                              fg_color="#3e4a3d", hover_color="#4e5b4d",
+                                              border_width=1, border_color="#d4af37")
+            self.seamless_btn.pack()
+            
+            self.seamless_desc = ctk.CTkLabel(self.seamless_col, text=self._t("seamless_desc"), 
+                                              font=("Arial", 9), text_color="#aaaaaa")
+            self.seamless_desc.pack(pady=(5, 0))
+
+            # Online Column
+            self.online_col = ctk.CTkFrame(self.button_frame, fg_color="transparent")
+            self.online_col.pack(side="left", padx=10)
+
+            self.online_btn = ctk.CTkButton(self.online_col, text=self._t("online_btn"), 
+                                            command=self.launch_online,
+                                            height=45, width=180,
+                                            font=("Arial", 14, "bold"),
+                                            fg_color="#1a1a1a", border_width=2, border_color="#d4af37")
+            self.online_btn.pack()
+
+            self.online_desc = ctk.CTkLabel(self.online_col, text=self._t("online_desc"), 
+                                            font=("Arial", 9), text_color="#aaaaaa")
+            self.online_desc.pack(pady=(5, 0))
+
+
+
     def change_game_path(self):
         # Confirm with user? For now just do it
         self.game_dir = None
         self.save_config("")
         self.setup_ui()
+        
+        # Clean refresh
+        if self.chat_socket:
+            self.after(500, self.broadcast_status)
+            self.after(500, self.request_chat_data)
 
     def repair_modpack(self):
         if self.game_dir:
@@ -2675,14 +3151,14 @@ class EldenRingLauncher(ctk.CTk):
             new_exe = os.path.join(self.launcher_base, "ER_Launcher_new.exe")
             bat_path = os.path.join(self.launcher_base, "update.bat")
             
-            # Use request with User-Agent to avoid blocks
-            req = urllib.request.Request(self.UPDATE_URL, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ERLauncher'})
-            
-            with urllib.request.urlopen(req) as response:
-                with open(new_exe, 'wb') as f:
-                    f.write(response.read())
-            
-            print(f"Download complete to {new_exe}. Preparing update script...")
+            # Helper to update button text
+            def update_btn_text(percent, text):
+                self.after(0, lambda: self.update_btn.configure(text=f"Downloading {int(percent*100)}%"))
+
+            if self.download_file_with_progress(self.UPDATE_URL, new_exe, progress_callback=update_btn_text):
+                 print(f"Download complete to {new_exe}. Preparing update script...")
+            else:
+                 raise Exception("Download failed.")
             
             # Create update batch script with absolute paths and longer timeout
             # We use /f /q to force deletion, and check if it's gone before move
@@ -2718,6 +3194,61 @@ del "%~f0"
         self.update_btn.configure(text="Update Failed!", fg_color="red", state="normal")
         self.after(3000, lambda: self.update_btn.configure(text=self._t("update_available_btn"), fg_color="#e15f41"))
         print(f"Detailed Error: {error}")
+
+    def check_for_modpack_updates(self):
+        """Check for modpack updates by comparing local modpack.txt with remote version."""
+        def check():
+            if not self.game_dir:
+                print("[UPDATE] Skipping check: No game directory set.")
+                return
+
+            try:
+                # 1. Fetch remote version
+                full_url = f"{self.MODPACK_VERSION_URL}?t={int(time.time())}"
+                print(f"[UPDATE] Checking URL: {full_url}")
+                req = urllib.request.Request(full_url, headers={'User-Agent': 'ERLauncher'})
+                with urllib.request.urlopen(req) as response:
+                    remote_version = response.read().decode('utf-8').strip()
+                
+                if not remote_version:
+                    print("[UPDATE] Remote version is empty.")
+                    return
+
+                # 2. Check local modpack.txt
+                local_txt_path = os.path.join(self.game_dir, "modpack.txt")
+                local_version = ""
+                if os.path.exists(local_txt_path):
+                    with open(local_txt_path, 'r') as f:
+                        local_version = f.read().strip()
+                
+                print(f"[UPDATE] Remote: '{remote_version}', Local: '{local_version or 'Missing'}'")
+
+                # 3. Compare and trigger UI
+                if remote_version != local_version:
+                    print(f"[UPDATE] Mismatch detected. Showing update button.")
+                    self.after(0, self.show_modpack_update_available)
+                else:
+                    print(f"[UPDATE] Modpack is up to date.")
+                    # Current version matches, clear any update flag
+                    if getattr(self, 'modpack_update_available', False):
+                        self.modpack_update_available = False
+                        self.after(0, self.refresh_launch_buttons)
+                
+            except Exception as e:
+                print(f"[UPDATE] Modpack update check failed: {e}")
+
+        threading.Thread(target=check, daemon=True).start()
+
+    def show_modpack_update_available(self, updates_found=None):
+        """Set update flag and refresh UI."""
+        self.modpack_update_available = True
+        self.refresh_launch_buttons()
+
+    def perform_modpack_update(self):
+        """Trigger update by calling repair_modpack."""
+        self.modpack_update_available = False # Hide button
+        self.refresh_launch_buttons()
+        self.repair_modpack()
 
 if __name__ == "__main__":
     app = EldenRingLauncher()

@@ -16,13 +16,23 @@ MAX_MESSAGE_LENGTH = 500
 RATE_LIMIT_SECONDS = 3
 IP_LAST_MESSAGE_TIME = {}
 NICKNAME_COLOR_MAP = {}
+PLAYTIME_FILE = "playtime.json"
+PLAYTIME_DATA = {} # user_id: total_seconds
 COLOR_PALETTE = [
     "#ff6b6b", "#4ecdc4", "#45b7d1", "#f7d794", "#786fa6", 
     "#f8a5c2", "#63cdda", "#ea8685", "#546de5", "#e15f41",
     "#c44569", "#574b90", "#f5cd79", "#cf6a87", "#3dc1d3",
     "#ff9f43", "#ee5253", "#10ac84", "#0abde3", "#5f27cd",
-    "#54a0ff", "#00d2d3", "#ff9ff3", "#feca57", "#ff6b6b",
-    "#48dbfb", "#1dd1a1", "#ff9ff3", "#54a0ff", "#5f27cd"
+    "#54a0ff", "#00d2d3", "#ff9ff3", "#feca57", "#48dbfb", 
+    "#1dd1a1", "#2ecc71", "#3498db", "#9b59b6", "#e67e22",
+    "#e74c3c", "#1abc9c", "#2c3e50", "#f1c40f", "#8e44ad",
+    "#2980b9", "#d35400", "#c0392b", "#16a085", "#7f8c8d",
+    "#D980FA", "#9980FA", "#833471", "#0652DD", "#1289A7",
+    "#EA2027", "#009432", "#F79F1F", "#1B1464", "#5758BB",
+    "#6F1E51", "#B53471", "#EE5A24", "#006266", "#1e3799",
+    "#b33939", "#218c74", "#33d9b2", "#cd6133", "#40407a",
+    "#706fd3", "#f7f1e3", "#34ace0", "#ff5252", "#ff793f",
+    "#d1ccc0", "#ffb142", "#ffda79", "#cc8e35", "#ccae62"
 ]
 
 import random
@@ -61,6 +71,25 @@ def load_chat_history():
         except Exception as e:
             logging.error(f"Failed to load chat history: {e}")
 
+def save_playtime():
+    try:
+        temp_file = PLAYTIME_FILE + ".tmp"
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(PLAYTIME_DATA, f, ensure_ascii=False, indent=2)
+        os.replace(temp_file, PLAYTIME_FILE)
+    except Exception as e:
+        logging.error(f"Failed to save playtime: {e}")
+
+def load_playtime():
+    global PLAYTIME_DATA
+    if os.path.exists(PLAYTIME_FILE):
+        try:
+            with open(PLAYTIME_FILE, "r", encoding="utf-8") as f:
+                PLAYTIME_DATA = json.load(f)
+            logging.info(f"Loaded playtime data for {len(PLAYTIME_DATA)} users.")
+        except Exception as e:
+            logging.error(f"Failed to load playtime: {e}")
+
 async def broadcast(message):
     if CLIENTS:
         await asyncio.gather(*(client.send(message) for client in CLIENTS.keys()), return_exceptions=True)
@@ -68,12 +97,25 @@ async def broadcast(message):
 async def broadcast_player_list():
     players = []
     for meta in CLIENTS.values():
+        uid = meta.get("user_id", "anonymous")
+        total_seconds = PLAYTIME_DATA.get(uid, 0)
+        
+        # Format playtime string
+        if total_seconds < 60:
+            playtime_str = f"{int(total_seconds)}s"
+        elif total_seconds < 3600:
+            playtime_str = f"{int(total_seconds // 60)}m"
+        else:
+            playtime_str = f"{total_seconds / 3600:.1f}h"
+
         players.append({
             "nickname": meta["nickname"],
             "modpack": meta["modpack"],
             "in_game": meta.get("in_game", False),
             "game_mode": meta.get("game_mode", "Online"),
-            "color": meta["color"]
+            "color": meta["color"],
+            "tripcode": meta.get("tripcode", ""),
+            "playtime": playtime_str
         })
     await broadcast(json.dumps({"type": "player_list", "players": players}, ensure_ascii=False))
 
@@ -109,13 +151,29 @@ async def handle_client(websocket, path=None):
                     mod = data.get("modpack", "Vanilla")
                     in_game = data.get("in_game", False)
                     game_mode = data.get("game_mode", "Online")
+                    user_id = data.get("user_id", "anonymous")
+                    
+                    # Playtime logic: calculate delta if they WERE in game
+                    now = time.time()
+                    old_meta = CLIENTS[websocket]
+                    if old_meta.get("in_game") and "last_status_time" in old_meta:
+                        delta = now - old_meta["last_status_time"]
+                        uid = old_meta.get("user_id", "anonymous")
+                        if uid != "anonymous":
+                             PLAYTIME_DATA[uid] = PLAYTIME_DATA.get(uid, 0) + delta
+                             save_playtime()
+
+                    tripcode = hashlib.sha256(user_id.encode()).hexdigest()[:4]
                     color = get_nickname_color(nick)
                     CLIENTS[websocket] = {
                         "nickname": nick, 
                         "modpack": mod, 
                         "in_game": in_game, 
                         "game_mode": game_mode, 
-                        "color": color
+                        "color": color,
+                        "tripcode": tripcode,
+                        "user_id": user_id,
+                        "last_status_time": now
                     }
                     await broadcast_player_list()
 
@@ -141,12 +199,28 @@ async def handle_client(websocket, path=None):
                     # Refresh metadata on every message to ensure player list is accurate
                     color = get_nickname_color(nick)
                     user_id = data.get("user_id", "anonymous")
+                    tripcode = hashlib.sha256(user_id.encode()).hexdigest()[:4]
+                    
+                    # Update metadata but KEEP tracking info
+                    now = time.time()
+                    old_meta = CLIENTS[websocket]
+                    # Update playtime on chat as well
+                    if old_meta.get("in_game") and "last_status_time" in old_meta:
+                        delta = now - old_meta["last_status_time"]
+                        uid = old_meta.get("user_id", "anonymous")
+                        if uid != "anonymous":
+                             PLAYTIME_DATA[uid] = PLAYTIME_DATA.get(uid, 0) + delta
+                             save_playtime()
+
                     CLIENTS[websocket] = {
                         "nickname": nick, 
-                        "modpack": data.get("modpack", CLIENTS[websocket]["modpack"]), 
-                        "in_game": data.get("in_game", CLIENTS[websocket]["in_game"]), 
-                        "game_mode": data.get("game_mode", CLIENTS[websocket]["game_mode"]), 
-                        "color": color
+                        "modpack": data.get("modpack", old_meta["modpack"]), 
+                        "in_game": data.get("in_game", old_meta["in_game"]), 
+                        "game_mode": data.get("game_mode", old_meta["game_mode"]), 
+                        "color": color,
+                        "tripcode": tripcode,
+                        "user_id": user_id,
+                        "last_status_time": now
                     }
                     
                     # Generate Tripcode if user_id is provided
@@ -176,12 +250,43 @@ async def handle_client(websocket, path=None):
                         history_payload = json.dumps({"type": "history", "messages": CHAT_HISTORY}, ensure_ascii=False)
                         await websocket.send(history_payload)
                     
+                elif data.get("type") == "request_player_list":
+                    # Send player list to the requester only
+                    players = []
+                    for meta in CLIENTS.values():
+                        uid = meta.get("user_id", "anonymous")
+                        total_seconds = PLAYTIME_DATA.get(uid, 0)
+                        
+                        if total_seconds < 60: playtime_str = f"{int(total_seconds)}s"
+                        elif total_seconds < 3600: playtime_str = f"{int(total_seconds // 60)}m"
+                        else: playtime_str = f"{total_seconds / 3600:.1f}h"
+
+                        players.append({
+                            "nickname": meta["nickname"],
+                            "modpack": meta["modpack"],
+                            "in_game": meta.get("in_game", False),
+                            "game_mode": meta.get("game_mode", "Online"),
+                            "color": meta["color"],
+                            "tripcode": meta.get("tripcode", ""),
+                            "playtime": playtime_str
+                        })
+                    await websocket.send(json.dumps({"type": "player_list", "players": players}, ensure_ascii=False))
+
             except json.JSONDecodeError:
                 logging.warning(f"Invalid JSON received from {ip}")
     except websockets.exceptions.ConnectionClosed:
         logging.info(f"Client disconnected: {ip}")
     finally:
         if websocket in CLIENTS:
+            meta = CLIENTS[websocket]
+            # Final playtime capture on disconnect
+            if meta.get("in_game") and "last_status_time" in meta:
+                now = time.time()
+                delta = now - meta["last_status_time"]
+                uid = meta.get("user_id", "anonymous")
+                if uid != "anonymous":
+                    PLAYTIME_DATA[uid] = PLAYTIME_DATA.get(uid, 0) + delta
+                    save_playtime()
             del CLIENTS[websocket]
             
         # Broadcast updated user count and list
@@ -190,6 +295,7 @@ async def handle_client(websocket, path=None):
 
 # Load history on module load
 load_chat_history()
+load_playtime()
 
 async def main():
     # Use 0.0.0.0 to allow external connections, port 8765
