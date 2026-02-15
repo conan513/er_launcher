@@ -61,7 +61,7 @@ def run_as_admin():
         return False
 
 class EldenRingLauncher(ctk.CTk):
-    VERSION = "1.2.9"
+    VERSION = "1.3.0"
     VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
     MODPACK_VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/modpack.txt"
@@ -476,7 +476,9 @@ class EldenRingLauncher(ctk.CTk):
             self.after(300, self.request_chat_data)
 
     def setup_ui(self):
-        # Clear existing widgets if any (for re-init)
+        if hasattr(self, '_launcher_locked_state'):
+            delattr(self, '_launcher_locked_state')
+        
         self.lockdown_frame = None
         for widget in self.winfo_children():
             widget.destroy()
@@ -739,6 +741,18 @@ class EldenRingLauncher(ctk.CTk):
         else:
             self.save_config(path)
             self.setup_ui()
+
+    def safe_rename(self, src, dest):
+        """Robustly rename a file, handling existing destinations and providing UI error feedback."""
+        try:
+            if os.path.exists(dest):
+                os.remove(dest)
+            os.rename(src, dest)
+            return True
+        except Exception as e:
+            print(f"[RENAME ERROR] Failed to rename {src} to {dest}: {e}")
+            self.show_rename_error(src, dest, str(e))
+            raise e # Re-raise to let the caller handle it if needed
 
     def show_rename_error(self, old_path, new_path, error_detail):
         # Clear overlay
@@ -2514,14 +2528,13 @@ class EldenRingLauncher(ctk.CTk):
         # Mapping names to folder-friendly IDs
         pack_map = {
             "Vanilla": "vanilla",
-            "Reforged": "reforged",
-            "Quality of Life": "qol",
-            "Diablo Loot (RNG)": "diablo"
+            "Reforged": "mod_err",
+            "Quality of Life": "mod_qol",
+            "Diablo Loot (RNG)": "mod_rng"
         }
         
         pack_id = pack_map.get(pack_name, "vanilla")
-        modpacks_dir = os.path.join(self.game_dir, "modpacks")
-        source_bin = os.path.join(modpacks_dir, pack_id, "regulation.bin")
+        source_bin = os.path.join(self.game_dir, pack_id, "regulation.bin")
         target_bin = os.path.join(self.game_dir, "regulation.bin")
 
         try:
@@ -3007,11 +3020,13 @@ class EldenRingLauncher(ctk.CTk):
         self.launch_seamless()
 
     def is_reforged_installed(self):
-        """Check if mod_err folder exists in game directory."""
+        """Check if Reforged mod files exist in the game directory."""
         if not self.game_dir:
             return False
+        # Check for both mod_err folder AND the essential regulation.bin inside it
         mod_err_path = os.path.join(self.game_dir, "mod_err")
-        return os.path.exists(mod_err_path) and os.path.isdir(mod_err_path)
+        ref_bin = os.path.join(mod_err_path, "regulation.bin")
+        return os.path.exists(mod_err_path) and os.path.exists(ref_bin)
 
     def download_file_with_progress(self, url, dest_path, progress_callback=None):
         """Standard download logic with cache-busting and progress reporting."""
@@ -3451,7 +3466,9 @@ class EldenRingLauncher(ctk.CTk):
                 if self.always_on_top_var.get():
                     self.attributes("-topmost", True)
         else:
-            print("Game stopped or Manual Restore: Restoring Full View.")
+            # Only print if we are actually coming from a locked state (or first time)
+            if getattr(self, '_launcher_locked_state', False) or not hasattr(self, '_launcher_locked_state'):
+                 print("Game stopped or Manual Restore: Restoring Full View.")
             # Reset manual unlock when game stops
             if not self.is_game_running():
                 self.manual_unlock = False
@@ -3459,7 +3476,7 @@ class EldenRingLauncher(ctk.CTk):
             # Restore Opacity & Pin
             # Safety: Only force alpha 1.0 if we are not in the middle of fade-in
             current_alpha = self.attributes("-alpha")
-            if current_alpha > 0.9 or not hasattr(self, '_fade_in_running'):
+            if current_alpha > 0.9 or not getattr(self, '_fade_in_running', False):
                  self.attributes("-alpha", 1.0)
 
             self.attributes("-topmost", False)
