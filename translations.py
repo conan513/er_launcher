@@ -3268,7 +3268,6 @@ TRANSLATIONS = {
         "disable_sharpening_desc": "Eltávolítja a sharpening utófeldolgozási effektet",
         "tab_mod_settings": "Mod Beállítások",
         "mod_settings_title": "Modpack Beállítások",
-        "lockdown_message": "Az Elden Ring fut... A kezelőfelület lezárva.",
         "config_missing_warning": "Figyelem: Hiányzó konfigurációs fájl!\n\n{file}\n\nKérlek, használd a 'Repair' (Javítás) funkciót a hiányzó fájlok pótlásához.",
         "download_reforged": "Reforged Modpack Letöltése",
         "downloading_reforged": "Reforged letöltése...",
@@ -3320,8 +3319,8 @@ TRANSLATIONS = {
         "leaderboard_column_rank": "Hely.",
         "leaderboard_column_player": "Játékos",
         "leaderboard_column_playtime": "Játékidő",
-    "leaderboard_no_data": "Még nincs ranglista adat.",
-    "btn_close": "Bezár",
+        "leaderboard_no_data": "Még nincs ranglista adat.",
+        "btn_close": "Bezár",
     },
     "id": {
         "admin_required": "Hak istimewa administrator diperlukan untuk tindakan ini.",

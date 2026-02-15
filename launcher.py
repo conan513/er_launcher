@@ -61,7 +61,7 @@ def run_as_admin():
         return False
 
 class EldenRingLauncher(ctk.CTk):
-    VERSION = "1.2.8"
+    VERSION = "1.2.9"
     VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
     MODPACK_VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/modpack.txt"
@@ -3304,8 +3304,17 @@ class EldenRingLauncher(ctk.CTk):
         # Recreate button frame for buttons
         self.button_frame = ctk.CTkFrame(self.tab_play, fg_color="transparent")
         
-        # Pack before the Save Converter section if it exists
+        # Pack before the Save Converter section if it exists and is currently managed by pack
+        # This prevents the buttons from disappearing if conv_frame is hidden (pack_forget)
+        is_managed = False
         if hasattr(self, 'conv_frame') and self.conv_frame.winfo_exists():
+            try:
+                if self.conv_frame.winfo_manager() == 'pack':
+                    is_managed = True
+            except:
+                pass
+
+        if is_managed:
             self.button_frame.pack(pady=15, before=self.conv_frame)
         else:
             self.button_frame.pack(pady=15)
