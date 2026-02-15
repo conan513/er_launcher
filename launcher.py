@@ -61,7 +61,7 @@ def run_as_admin():
         return False
 
 class EldenRingLauncher(ctk.CTk):
-    VERSION = "1.2.2"
+    VERSION = "1.2.8"
     VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
     MODPACK_VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/modpack.txt"
@@ -2443,8 +2443,9 @@ class EldenRingLauncher(ctk.CTk):
 
     def update_seamless_scaling_availability(self):
         """Set scaling to 0 and disable if Reforged is selected."""
-        current_modpack = self.modpack_var.get()
-        is_reforged = (current_modpack == self._t("reforged") or current_modpack == "Reforged")
+        # Read from config directly to avoid timing issues on startup
+        current_modpack = self.read_config_value('modpack', "Vanilla")
+        is_reforged = (current_modpack == "Reforged")
         
         scaling_keys = [
             "SCALING|enemy_health_scaling",
@@ -2493,6 +2494,14 @@ class EldenRingLauncher(ctk.CTk):
                     widget.delete(0, tk.END)
                     widget.insert(0, val_to_use)
         
+        # Update Reforged Scaling Note visibility
+        if hasattr(self, 'reforged_scaling_note') and hasattr(self, 'scaling_header_sep'):
+            if is_reforged:
+                self.reforged_scaling_note.configure(text=self._t("seamless_reforged_scaling_note"))
+                self.reforged_scaling_note.pack(after=self.scaling_header_sep, pady=(0, 10), padx=20, anchor="w")
+            else:
+                self.reforged_scaling_note.pack_forget()
+
         # Release guard
         self.updating_scaling_ui = False
 
@@ -3682,7 +3691,12 @@ del "%~f0"
         self._add_seamless_entry("GAMEPLAY", "default_boot_master_volume", self._t("seamless_default_boot_master_volume"), width=50, desc_key="seamless_desc_volume")
 
         # --- SCALING ---
-        self._add_section_header(self.seamless_scroll, self._t("seamless_scaling"))
+        self.scaling_header_sep = self._add_section_header(self.seamless_scroll, self._t("seamless_scaling"))
+        
+        # Reforged Scaling Note (Hidden by default)
+        self.reforged_scaling_note = ctk.CTkLabel(self.seamless_scroll, text="", font=("Arial", 11, "italic"), text_color="#ffcc00", wraplength=450)
+        self.reforged_scaling_note.pack(pady=(0, 10), padx=20, anchor="w")
+        self.reforged_scaling_note.pack_forget()
         
         self._add_seamless_entry("SCALING", "enemy_health_scaling", self._t("seamless_enemy_health"), desc_key="seamless_desc_enemy_health")
         self._add_seamless_entry("SCALING", "enemy_damage_scaling", self._t("seamless_enemy_damage"), desc_key="seamless_desc_enemy_damage")
@@ -3699,7 +3713,9 @@ del "%~f0"
 
     def _add_section_header(self, parent, text):
         ctk.CTkLabel(parent, text=text, font=("Arial", 12, "bold"), text_color="white").pack(pady=(15, 5), anchor="w", padx=10)
-        ctk.CTkFrame(parent, height=2, fg_color="#333333").pack(fill="x", padx=10, pady=(0, 10))
+        sep = ctk.CTkFrame(parent, height=2, fg_color="#333333")
+        sep.pack(fill="x", padx=10, pady=(0, 10))
+        return sep
 
     def _add_seamless_bool(self, section, key, label_text):
         var = ctk.IntVar()
@@ -3722,7 +3738,7 @@ del "%~f0"
         
         # Determine variable type - all entries are strings here
         var = ctk.StringVar()
-        var.trace_add("write", lambda *args: self.save_seamless_config(silent=True))
+        var.trace_add("write", lambda *args: self.save_seamless_config(silent=True, write_to_file=True))
         
         entry = ctk.CTkEntry(upper_frame, width=width, fg_color="#1a1a1a", textvariable=var)
         entry.pack(side="right")
@@ -3744,9 +3760,11 @@ del "%~f0"
 
     def get_config_prefix(self):
         """Get prefix for persistent settings. Reforged is separate, others share 'vanilla_'."""
-        current_val = self.modpack_var.get()
-        # Check against translated and internal names
-        if current_val == self._t("reforged") or current_val == "Reforged": return "reforged_"
+        # Read from config directly to avoid timing issues on startup
+        current_val = self.read_config_value('modpack', "Vanilla")
+        # Check against internal name (config stores "Reforged", not translated)
+        if current_val == "Reforged": 
+            return "reforged_"
         # All other modpacks (Vanilla, QoL, Diablo, etc.) share the same settings
         return "vanilla_"
 
@@ -3809,28 +3827,38 @@ del "%~f0"
             "PASSWORD": ["cooppassword"]
         }
         
+        
+        # Check if Reforged is selected - read from config directly to avoid timing issues
+        # (modpack_var may not be set yet when this is called during startup)
+        current_modpack = self.read_config_value('modpack', "Vanilla")
+        is_reforged = (current_modpack == "Reforged")
+        
         for section, keys in entry_map.items():
             for key in keys:
                 widget_key = f"{section}|{key}"
                 if widget_key in self.seamless_widgets:
-                    # Try persistent config
-                    saved_val = self.read_config_value(f"{prefix}seamless_{key}", None)
-                    
-                    val_to_use = ""
-                    # Determine validity: Password CAN be empty, others CANNOT
-                    is_valid = False
-                    if saved_val is not None:
-                        if key == "cooppassword":
-                            is_valid = True # Empty password is allowed
-                        else:
-                            is_valid = (saved_val.strip() != "")
-
-                    if is_valid:
-                        val_to_use = saved_val
+                    # SPECIAL CASE: Force 0 for Reforged scaling
+                    if section == "SCALING" and is_reforged:
+                        val_to_use = "0"
                     else:
-                        # Use default if available, allow empty for password
-                        val_to_use = str(defaults.get(key, ""))
-                        self.save_config_value(f"{prefix}seamless_{key}", val_to_use)
+                        # Try persistent config
+                        saved_val = self.read_config_value(f"{prefix}seamless_{key}", None)
+                        
+                        val_to_use = ""
+                        # Determine validity: Password CAN be empty, others CANNOT
+                        is_valid = False
+                        if saved_val is not None:
+                            if key == "cooppassword":
+                                is_valid = True # Empty password is allowed
+                            else:
+                                is_valid = (saved_val.strip() != "")
+
+                        if is_valid:
+                            val_to_use = saved_val
+                        else:
+                            # Use default if available, allow empty for password
+                            val_to_use = str(defaults.get(key, ""))
+                            self.save_config_value(f"{prefix}seamless_{key}", val_to_use)
                     
                     self.seamless_widgets[widget_key].delete(0, tk.END)
                     self.seamless_widgets[widget_key].insert(0, val_to_use)
