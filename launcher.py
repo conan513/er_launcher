@@ -61,7 +61,7 @@ def run_as_admin():
         return False
 
 class EldenRingLauncher(ctk.CTk):
-    VERSION = "1.1.2"
+    VERSION = "1.2.2"
     VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
     MODPACK_VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/modpack.txt"
@@ -72,6 +72,8 @@ class EldenRingLauncher(ctk.CTk):
         self.title("Elden Ring Launcher")
         self.attributes("-alpha", 0.0) # Start fully transparent to prevent flash
         self.resizable(False, False)
+        self.loading_seamless = False # Guard to prevent auto-save race conditions during load
+        self.updating_scaling_ui = False # Guard to prevent saves during Reforged scaling UI override
 
         # Determine base directory
         if getattr(sys, 'frozen', False):
@@ -103,6 +105,40 @@ class EldenRingLauncher(ctk.CTk):
         self.found_paths_set = set()
         self.bootstrap_debug_log = []
         self.modpack_var = ctk.StringVar(value="Vanilla")
+
+        # --- Seamless Co-op Defaults ---
+        self.SEAMLESS_DEFAULTS = {
+            "vanilla": {
+                "allow_invaders": 1,
+                "death_debuffs": 1,
+                "allow_summons": 1,
+                "overhead_player_display": 4, # Death Count
+                "skip_splash_screens": 0,
+                "default_boot_master_volume": 5,
+                "enemy_health_scaling": 35,
+                "enemy_damage_scaling": 0,
+                "enemy_posture_scaling": 15,
+                "boss_health_scaling": 100,
+                "boss_damage_scaling": 0,
+                "boss_posture_scaling": 20,
+                "save_file_extension": "co2"
+            },
+            "reforged": {
+                "allow_invaders": 0,
+                "death_debuffs": 0,
+                "allow_summons": 1,
+                "overhead_player_display": 0, # Normal
+                "skip_splash_screens": 0,
+                "default_boot_master_volume": 5,
+                "enemy_health_scaling": 0,
+                "enemy_damage_scaling": 0,
+                "enemy_posture_scaling": 0,
+                "boss_health_scaling": 0,
+                "boss_damage_scaling": 0,
+                "boss_posture_scaling": 0,
+                "save_file_extension": "err"
+            }
+        }
         
         # Language Setup
         saved_lang = self.read_config_value("language", "en")
@@ -110,6 +146,9 @@ class EldenRingLauncher(ctk.CTk):
         
         self.game_active = False
         self.last_game_mode = "Online"
+        self.launch_start_time = 0
+        self.modpack_update_available = False
+        self.last_broadcast_time = 0
         
         # QoL Mod Toggles (default all enabled)
         self.qol_questlog_var = ctk.BooleanVar(value=self.read_config_value("qol_questlog_enabled", "True") == "True")
@@ -891,6 +930,8 @@ class EldenRingLauncher(ctk.CTk):
 
     def finish_setup_after_bootstrap(self, path):
         self.save_config(path)
+        # Restore persistent settings to the fresh installation
+        self.load_seamless_config()
         self.setup_ui()
         
         # Refresh player list and chat after bootstrap UI reset
@@ -1306,11 +1347,17 @@ class EldenRingLauncher(ctk.CTk):
             if self.qol_fps_unlocker_var.get():
                 # Enable: rename .dll.disabled to .dll
                 if os.path.exists(fps_dll_disabled):
+                    # If target already exists, remove it first to avoid conflict
+                    if os.path.exists(fps_dll_path):
+                        os.remove(fps_dll_path)
                     os.rename(fps_dll_disabled, fps_dll_path)
                     print(f"Enabled FPS Unlocker: {fps_dll_path}")
             else:
                 # Disable: rename .dll to .dll.disabled
                 if os.path.exists(fps_dll_path):
+                    # If target already exists, remove it first to avoid conflict
+                    if os.path.exists(fps_dll_disabled):
+                        os.remove(fps_dll_disabled)
                     os.rename(fps_dll_path, fps_dll_disabled)
                     print(f"Disabled FPS Unlocker: {fps_dll_disabled}")
         except Exception as e:
@@ -1346,13 +1393,19 @@ class EldenRingLauncher(ctk.CTk):
             if self.disable_sharpening_var.get():
                 # Disable sharpening: ensure file is active (not .disabled)
                 if os.path.exists(shader_disabled):
+                    # If target already exists, remove it first to avoid conflict
+                    if os.path.exists(shader_file):
+                        os.remove(shader_file)
                     os.rename(shader_disabled, shader_file)
-                    print(f"Disabled sharpening: {shader_file}")
+                    print(f"Disabled sharpening (Mod Active): {shader_file}")
             else:
-                # Enable sharpening: rename file to .disabled
+                # Enable sharpening (Default): rename file to .disabled
                 if os.path.exists(shader_file):
+                    # If target already exists, remove it first to avoid conflict
+                    if os.path.exists(shader_disabled):
+                        os.remove(shader_disabled)
                     os.rename(shader_file, shader_disabled)
-                    print(f"Enabled sharpening: {shader_disabled}")
+                    print(f"Enabled sharpening (Mod Disabled): {shader_disabled}")
         except Exception as e:
             print(f"Error toggling sharpening file: {e}")
     
@@ -2224,6 +2277,10 @@ class EldenRingLauncher(ctk.CTk):
                       width=120, height=35, font=("Arial", 12, "bold")).pack(pady=15)
 
     def monitor_process(self):
+        # Ensure launch_start_time is initialized
+        if not hasattr(self, 'launch_start_time'):
+            self.launch_start_time = 0
+            
         try:
             is_running = self.is_game_running()
             
@@ -2296,18 +2353,14 @@ class EldenRingLauncher(ctk.CTk):
         try:
             if mode == "seamless":
                 if os.path.exists(ersc_disabled):
-                    if os.path.exists(ersc_enabled): os.remove(ersc_enabled)
-                    os.rename(ersc_disabled, ersc_enabled)
+                    self.safe_rename(ersc_disabled, ersc_enabled)
                 if os.path.exists(waygate_enabled):
-                    if os.path.exists(waygate_disabled): os.remove(waygate_disabled)
-                    os.rename(waygate_enabled, waygate_disabled)
+                    self.safe_rename(waygate_enabled, waygate_disabled)
             else:
                 if os.path.exists(ersc_enabled):
-                    if os.path.exists(ersc_disabled): os.remove(ersc_disabled)
-                    os.rename(ersc_enabled, ersc_disabled)
+                    self.safe_rename(ersc_enabled, ersc_disabled)
                 if os.path.exists(waygate_disabled):
-                    if os.path.exists(waygate_enabled): os.remove(waygate_enabled)
-                    os.rename(waygate_disabled, waygate_enabled)
+                    self.safe_rename(waygate_disabled, waygate_enabled)
             return True
         except Exception as e:
             self.status_label.configure(text=f"{self._t('dll_error_prefix')} {e}", text_color="#ff4444")
@@ -2340,6 +2393,9 @@ class EldenRingLauncher(ctk.CTk):
         return None
 
     def on_modpack_change(self, value):
+        # Ensure variable is updated immediately to prevent race conditions in config loading
+        self.modpack_var.set(value)
+        
         # Map translated value back to internal key
         internal_key = "Vanilla"
         if value == self._t("reforged"): internal_key = "Reforged"
@@ -2380,8 +2436,10 @@ class EldenRingLauncher(ctk.CTk):
         if hasattr(self, 'tab_play') and self.tab_play.winfo_exists():
             self.refresh_launch_buttons()
             
-        # Update Seamless tab scaling restriction
-        self.update_seamless_scaling_availability()
+        # Load persistent settings for the new modpack (updates UI and ersc_settings.ini)
+        self.load_seamless_config()
+            
+        # Redundant call removed - load_seamless_config already handles this within the safety guard.
 
     def update_seamless_scaling_availability(self):
         """Set scaling to 0 and disable if Reforged is selected."""
@@ -2397,6 +2455,9 @@ class EldenRingLauncher(ctk.CTk):
             "SCALING|boss_posture_scaling"
         ]
         
+        # CRITICAL: Set guard to prevent trace callbacks from saving during UI override
+        self.updating_scaling_ui = True
+        
         for key in scaling_keys:
             if key in self.seamless_widgets:
                 widget = self.seamless_widgets[key]
@@ -2408,7 +2469,32 @@ class EldenRingLauncher(ctk.CTk):
                     widget.insert(0, "0")
                     widget.configure(state="disabled")
                 else:
+                    # Enable widget and reload the correct value from config
                     widget.configure(state="normal")
+                    
+                    # Extract the actual key name (e.g., "enemy_health_scaling" from "SCALING|enemy_health_scaling")
+                    actual_key = key.split("|")[1]
+                    prefix = self.get_config_prefix()
+                    
+                    # Determine defaults key (vanilla or reforged) based on prefix
+                    defaults_key = "reforged" if "reforged" in prefix else "vanilla"
+                    defaults = self.SEAMLESS_DEFAULTS.get(defaults_key, self.SEAMLESS_DEFAULTS["vanilla"])
+                    
+                    # Read the saved value
+                    saved_val = self.read_config_value(f"{prefix}seamless_{actual_key}", None)
+                    
+                    # Determine the value to use
+                    if saved_val is not None and saved_val.strip() != "":
+                        val_to_use = saved_val
+                    else:
+                        val_to_use = str(defaults.get(actual_key, ""))
+                    
+                    # Update the widget
+                    widget.delete(0, tk.END)
+                    widget.insert(0, val_to_use)
+        
+        # Release guard
+        self.updating_scaling_ui = False
 
 
     def apply_modpack(self, pack_name):
@@ -2636,8 +2722,7 @@ class EldenRingLauncher(ctk.CTk):
                     new_f = f[:-4] # Remove .co2
                     new_path = os.path.join(save_folder, new_f)
                     try:
-                        if os.path.exists(new_path): os.remove(new_path)
-                        os.rename(old_path, new_path)
+                        self.safe_rename(old_path, new_path)
                         mod_count += 1
                     except Exception as e:
                         print(f"Error auto-renaming {f}: {e}")
@@ -2761,6 +2846,10 @@ class EldenRingLauncher(ctk.CTk):
         if os.path.exists(self.launch_exe):
             self.update_status(self._t("launch_seamless"), "#d4af37")
             self.last_game_mode = "Seamless"
+            
+            # Force-write Seamless Config immediately before launch to ensuring state is perfect
+            self.save_seamless_config(silent=True, write_to_file=True)
+            
             subprocess.Popen([self.launch_exe], cwd=self.game_dir)
             self.launch_start_time = time.time()
             self.broadcast_status()
@@ -3089,6 +3178,10 @@ class EldenRingLauncher(ctk.CTk):
 
             self.update_status(self._t("reforged_installed"), "#44ff44")
             self.download_in_progress = False
+            
+            # Restore persistent settings to the fresh modpack files (Main Thread)
+            self.after(0, self.load_seamless_config)
+            
             self.after(1000, self.refresh_launch_buttons)
             
         except Exception as e:
@@ -3222,8 +3315,12 @@ class EldenRingLauncher(ctk.CTk):
             # Check for modpack updates
             has_update = getattr(self, 'modpack_update_available', False)
             if has_update:
+                btn_text = self._t("modpack_update_available_btn")
+                # If modpack.txt is missing, try to use a more descriptive "Install" text if desired
+                # for now keeping same button but ensuring it's visible
+                
                 modpack_update_btn = ctk.CTkButton(self.button_frame, 
-                                                  text=self._t("modpack_update_available_btn"),
+                                                  text=btn_text,
                                                   command=self.perform_modpack_update,
                                                   fg_color="#e15f41", hover_color="#c44569",
                                                   height=40, width=380,
@@ -3515,11 +3612,13 @@ del "%~f0"
 
                 # 3. Compare and trigger UI
                 if remote_version != local_version:
-                    print(f"[UPDATE] Mismatch detected. Showing update button.")
+                    print(f"[UPDATE] Mismatch detected (Mismatch or Missing). Showing update button.")
+                    self.modpack_is_missing = (not local_version)
                     self.after(0, self.show_modpack_update_available)
                 else:
                     print(f"[UPDATE] Modpack is up to date.")
                     # Current version matches, clear any update flag
+                    self.modpack_is_missing = False
                     if getattr(self, 'modpack_update_available', False):
                         self.modpack_update_available = False
                         self.after(0, self.refresh_launch_buttons)
@@ -3643,74 +3742,116 @@ del "%~f0"
             desc_text = self._t(desc_key)
             ctk.CTkLabel(frame, text=desc_text, font=("Arial", 10), text_color="gray").pack(anchor="w", pady=(0, 5))
 
+    def get_config_prefix(self):
+        """Get prefix for persistent settings. Reforged is separate, others share 'vanilla_'."""
+        current_val = self.modpack_var.get()
+        # Check against translated and internal names
+        if current_val == self._t("reforged") or current_val == "Reforged": return "reforged_"
+        # All other modpacks (Vanilla, QoL, Diablo, etc.) share the same settings
+        return "vanilla_"
+
     def load_seamless_config(self):
-        """Load values from ersc_settings.ini"""
-        config_path = os.path.join(self.game_dir, "ersc_settings.ini")
+        """Load values from launcher_config.ini (persistent w/ modpack prefix) or fallback."""
+        self.loading_seamless = True # LOCK: Prevent auto-saves while loading UI
         
-        if not os.path.exists(config_path):
-            # If missing, warn user and suggest repair (only if we are on the Seamless tab)
-            # But we are calling this during setup, so maybe just log it or show a placeholder?
-            # User request: "recommend repair function"
-            # We can show a label in the settings area if config is missing.
+        prefix = self.get_config_prefix()
             
-            # Clear widgets or disable them?
-            # For now, let's just return. The UI is built, just empty/default.
-            # We can add a warning label at top.
-            warning_label = ctk.CTkLabel(self.seamless_scroll, text=self._t("config_missing_warning").format(file="ersc_settings.ini"), 
-                                         text_color="#ff4444", justify="left")
-            warning_label.pack(pady=10, before=self.seamless_scroll.winfo_children()[0])
-            return
+            # Determine defaults key (vanilla or reforged) based on prefix
+        defaults_key = "reforged" if "reforged" in prefix else "vanilla"
+        defaults = self.SEAMLESS_DEFAULTS.get(defaults_key, self.SEAMLESS_DEFAULTS["vanilla"])
 
-        parser = configparser.ConfigParser()
-        try:
-            # explicit encoding to avoid issues with special chars or BOM
-            parser.read(config_path, encoding='utf-8')
-            
-            # Gameplay Bools
-            for key in ["allow_invaders", "death_debuffs", "allow_summons", "skip_splash_screens"]:
-                widget_key = f"GAMEPLAY|{key}"
-                if widget_key in self.seamless_widgets:
-                    val = parser.getint("GAMEPLAY", key, fallback=0)
+        # Note: We NO LONGER read ersc_settings.ini. 
+        # The Launcher is the Master. ersc_settings.ini is a Slave (write-only).
+        # This prevents "leaking" settings from one modpack to another via the shared file.
+
+        # 1. Gameplay Bools
+        for key in ["allow_invaders", "death_debuffs", "allow_summons", "skip_splash_screens"]:
+            widget_key = f"GAMEPLAY|{key}"
+            if widget_key in self.seamless_widgets:
+                # Try persistent config with prefix
+                saved_val = self.read_config_value(f"{prefix}seamless_{key}", None)
+                
+                # Check if valid (not None and not empty string)
+                if saved_val is not None and saved_val.strip() != "":
+                    # Found in launcher config
+                    self.seamless_widgets[widget_key].set(int(saved_val))
+                else:
+                    # Default from dictionary
+                    val = defaults.get(key, 0)
                     self.seamless_widgets[widget_key].set(val)
+                    # Enforce default into config if missing
+                    self.save_config_value(f"{prefix}seamless_{key}", str(val))
 
-            # Overhead Display
-            oh_val = parser.getint("GAMEPLAY", "overhead_player_display", fallback=0)
-            # Find matching string in option menu
-            oh_options = self.seamless_widgets["overhead_player_display"].cget("values")
-            if oh_options:
-                for opt in oh_options:
-                    if opt.startswith(str(oh_val)):
-                        self.seamless_widgets["overhead_player_display"].set(opt)
-                        break
+        # 2. Overhead Display
+        saved_oh = self.read_config_value(f"{prefix}seamless_overhead_player_display", None)
+             
+        oh_val = defaults.get("overhead_player_display", 0) # Dictionary default
+        
+        if saved_oh is not None and saved_oh.strip() != "":
+             oh_val = int(saved_oh)
+        else:
+             # Save default if missing
+             self.save_config_value(f"{prefix}seamless_overhead_player_display", str(oh_val))
+             
+        # Find matching string in option menu
+        oh_options = self.seamless_widgets["overhead_player_display"].cget("values")
+        if oh_options:
+            for opt in oh_options:
+                if opt.startswith(str(oh_val)):
+                    self.seamless_widgets["overhead_player_display"].set(opt)
+                    break
 
-            # Entries (Gameplay, Scaling, Password)
-            entry_map = {
-                "GAMEPLAY": ["default_boot_master_volume"],
-                "SCALING": ["enemy_health_scaling", "enemy_damage_scaling", "enemy_posture_scaling", 
-                            "boss_health_scaling", "boss_damage_scaling", "boss_posture_scaling"],
-                "PASSWORD": ["cooppassword"]
-            }
-            
-            for section, keys in entry_map.items():
-                for key in keys:
-                    widget_key = f"{section}|{key}"
-                    if widget_key in self.seamless_widgets:
-                        val = parser.get(section, key, fallback="")
-                        self.seamless_widgets[widget_key].delete(0, tk.END)
-                        self.seamless_widgets[widget_key].insert(0, val)
-                        
-        except Exception as e:
-            print(f"Error loading Seamless config: {e}")
-            
-        # Apply Reforged restriction if needed
+        # 3. Entries (Gameplay, Scaling, Password)
+        entry_map = {
+            "GAMEPLAY": ["default_boot_master_volume"],
+            "SCALING": ["enemy_health_scaling", "enemy_damage_scaling", "enemy_posture_scaling", 
+                        "boss_health_scaling", "boss_damage_scaling", "boss_posture_scaling"],
+            "PASSWORD": ["cooppassword"]
+        }
+        
+        for section, keys in entry_map.items():
+            for key in keys:
+                widget_key = f"{section}|{key}"
+                if widget_key in self.seamless_widgets:
+                    # Try persistent config
+                    saved_val = self.read_config_value(f"{prefix}seamless_{key}", None)
+                    
+                    val_to_use = ""
+                    # Determine validity: Password CAN be empty, others CANNOT
+                    is_valid = False
+                    if saved_val is not None:
+                        if key == "cooppassword":
+                            is_valid = True # Empty password is allowed
+                        else:
+                            is_valid = (saved_val.strip() != "")
+
+                    if is_valid:
+                        val_to_use = saved_val
+                    else:
+                        # Use default if available, allow empty for password
+                        val_to_use = str(defaults.get(key, ""))
+                        self.save_config_value(f"{prefix}seamless_{key}", val_to_use)
+                    
+                    self.seamless_widgets[widget_key].delete(0, tk.END)
+                    self.seamless_widgets[widget_key].insert(0, val_to_use)
+        
+        # Apply Reforged restriction if needed (Overwrite UI logic)
+        # We do this WHILE the guard is still Active, so these "Set to 0" actions do NOT save to persistence.
         self.update_seamless_scaling_availability()
+        
+        self.loading_seamless = False # UNLOCK: Allow saving again
+        # We do NOT save here. We only save when user changes something or launches the game.
 
     def enforce_seamless_defaults(self):
         """Ensure critical Seamless Co-op settings are set before launch."""
         config_path = os.path.join(self.game_dir, "ersc_settings.ini")
-        # If missing, we might want to create it or skip?
-        # User said "launcher *will* write this... on every launch".
-        # So we should create/update.
+        
+        prefix = self.get_config_prefix()
+        # Determine defaults key (vanilla or reforged) based on prefix
+        defaults_key = "reforged" if "reforged" in prefix else "vanilla"
+        defaults = self.SEAMLESS_DEFAULTS.get(defaults_key, self.SEAMLESS_DEFAULTS["vanilla"])
+        
+        target_extension = defaults.get("save_file_extension", "co2")
         
         parser = configparser.ConfigParser()
         try:
@@ -3722,8 +3863,10 @@ del "%~f0"
             if not parser.has_section("SAVE"): 
                 parser.add_section("SAVE")
                 changed = True
-            if parser.get("SAVE", "save_file_extension", fallback="") != "co2":
-                parser.set("SAVE", "save_file_extension", "co2")
+            
+            # Enforce extension based on modpack
+            if parser.get("SAVE", "save_file_extension", fallback="") != target_extension:
+                parser.set("SAVE", "save_file_extension", target_extension)
                 changed = True
                 
             if not parser.has_section("LANGUAGE"): 
@@ -3733,54 +3876,47 @@ del "%~f0"
                 parser.set("LANGUAGE", "mod_language_override", "english")
                 changed = True
             
-            # Also ensure GAMEPLAY section exists for critical functions? 
-            # Not requested, but good practice if creating from scratch.
-            
             if changed:
                 with open(config_path, 'w') as f:
                     parser.write(f)
-                print(f"[Seamless] Enforced defaults in {config_path}")
+                print(f"[Seamless] Enforced defaults in {config_path} (Ext: {target_extension})")
                 
         except Exception as e:
             print(f"Error enforcing Seamless defaults: {e}")
 
-    def save_seamless_config(self, silent=False):
-        """Save values to ersc_settings.ini"""
+    def save_seamless_config(self, silent=False, write_to_file=False):
+        """Save values to ersc_settings.ini AND launcher_config.ini (Persistence with Prefix)"""
+        # RACE CONDITION FIX: If we are currently loading, DO NOT SAVE.
+        # This prevents the "partial load" state from overwriting the profile.
+        if getattr(self, 'loading_seamless', False):
+            return
+        
+        # UI OVERRIDE FIX: If we are updating scaling UI for Reforged restriction, DO NOT SAVE.
+        # This prevents the forced "0" values from being persisted to the config.
+        if getattr(self, 'updating_scaling_ui', False):
+            return
+
         config_path = os.path.join(self.game_dir, "ersc_settings.ini")
+        prefix = self.get_config_prefix()
+        
+        # Determine defaults key (vanilla or reforged) based on prefix
+        defaults_key = "reforged" if "reforged" in prefix else "vanilla"
+        defaults = self.SEAMLESS_DEFAULTS.get(defaults_key, self.SEAMLESS_DEFAULTS["vanilla"])
+        target_extension = defaults.get("save_file_extension", "co2")
 
-        # If missing, we can try to create it, but better to check if it exists first or warn?
-        # User said "file will be found in game root folder".
-        # We will create it if missing, or use existing.
-        
-        parser = configparser.ConfigParser()
-        # Read existing to preserve comments/structure if possible? 
-        # ConfigParser kills comments. Users might not like that.
-        # But user asked to edit settings, standard python configparser is implied unless specified.
-        # Given the file content provided, it has comments. ConfigParser WILL REMOVE them.
-        # To preserve comments, we'd need a different lib or regex replacement.
-        # For this task, I'll use ConfigParser and maybe warn user or just accept it.
-        # Actually, let's try to just update specific lines if we want to be fancy, but ConfigParser is safer for logic.
-        # I'll stick to ConfigParser for reliability of values.
-        
+        # 1. Update Persistent Launcher Config First
         try:
-            parser.read(config_path) # Read existing to keep other keys
-            
-            # Ensure sections exist
-            for section in ["GAMEPLAY", "SCALING", "PASSWORD", "SAVE", "LANGUAGE"]:
-                if not parser.has_section(section):
-                    parser.add_section(section)
-
             # Gameplay Bools
             for key in ["allow_invaders", "death_debuffs", "allow_summons", "skip_splash_screens"]:
                 val = self.seamless_widgets[f"GAMEPLAY|{key}"].get()
-                parser.set("GAMEPLAY", key, str(val))
+                self.save_config_value(f"{prefix}seamless_{key}", str(val))
 
             # Overhead
             oh_str = self.seamless_widgets["overhead_player_display"].get()
             oh_val = oh_str.split(" ")[0] # Extract number
-            parser.set("GAMEPLAY", "overhead_player_display", oh_val)
+            self.save_config_value(f"{prefix}seamless_overhead_player_display", str(oh_val))
 
-            # Entries (Gameplay, Scaling, Password)
+            # Entries
             entry_map = {
                 "GAMEPLAY": ["default_boot_master_volume"],
                 "SCALING": ["enemy_health_scaling", "enemy_damage_scaling", "enemy_posture_scaling", 
@@ -3791,27 +3927,63 @@ del "%~f0"
             for section, keys in entry_map.items():
                 for key in keys:
                     val = self.seamless_widgets[f"{section}|{key}"].get()
-                    parser.set(section, key, val)
-
-            # Enforce fixed values
-            if not parser.has_section("SAVE"): parser.add_section("SAVE")
-            parser.set("SAVE", "save_file_extension", "co2")
-            
-            if not parser.has_section("LANGUAGE"): parser.add_section("LANGUAGE")
-            parser.set("LANGUAGE", "mod_language_override", "english")
-
-            with open(config_path, 'w') as f:
-                parser.write(f)
-            
-            if not silent:
-                messagebox.showinfo(self._t("app_title"), self._t("settings_saved"))
-            else:
-                # Optional: Show subtle status like "Saving..."?
-                # For now just silent.
-                pass
-
+                    self.save_config_value(f"{prefix}seamless_{key}", str(val))
+                    
         except Exception as e:
-            messagebox.showerror(self._t("error_prefix"), f"Failed to save settings: {e}")
+            print(f"Error saving to launcher persistence: {e}")
+
+        # 2. Write to ersc_settings.ini (ONLY IF REQUESTED)
+        if write_to_file:
+            parser = configparser.ConfigParser()
+            try:
+                if os.path.exists(config_path):
+                    parser.read(config_path) # Read existing to keep other keys if any
+                
+                # Ensure sections exist
+                for section in ["GAMEPLAY", "SCALING", "PASSWORD", "SAVE", "LANGUAGE"]:
+                    if not parser.has_section(section):
+                        parser.add_section(section)
+
+                # Gameplay Bools
+                for key in ["allow_invaders", "death_debuffs", "allow_summons", "skip_splash_screens"]:
+                    val = self.seamless_widgets[f"GAMEPLAY|{key}"].get()
+                    parser.set("GAMEPLAY", key, str(val))
+
+                # Overhead
+                oh_str = self.seamless_widgets["overhead_player_display"].get()
+                oh_val = oh_str.split(" ")[0] 
+                parser.set("GAMEPLAY", "overhead_player_display", oh_val)
+
+                # Entries (Gameplay, Scaling, Password)
+                entry_map = {
+                    "GAMEPLAY": ["default_boot_master_volume"],
+                    "SCALING": ["enemy_health_scaling", "enemy_damage_scaling", "enemy_posture_scaling", 
+                                "boss_health_scaling", "boss_damage_scaling", "boss_posture_scaling"],
+                    "PASSWORD": ["cooppassword"]
+                }
+                
+                for section, keys in entry_map.items():
+                    for key in keys:
+                        val = self.seamless_widgets[f"{section}|{key}"].get()
+                        parser.set(section, key, val)
+
+                # Enforce fixed values
+                if not parser.has_section("SAVE"): parser.add_section("SAVE")
+                parser.set("SAVE", "save_file_extension", target_extension)
+                
+                if not parser.has_section("LANGUAGE"): parser.add_section("LANGUAGE")
+                parser.set("LANGUAGE", "mod_language_override", "english")
+
+                with open(config_path, 'w') as f:
+                    parser.write(f)
+                
+                if not silent:
+                    print(f"[Seamless] Config saved to file: {config_path}")
+
+            except Exception as e:
+                print(f"Failed to save settings to file: {e}")
+        else:
+            if not silent: print(f"[Seamless] Config saved (Internal Only)")
 
 if __name__ == "__main__":
     app = EldenRingLauncher()
