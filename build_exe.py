@@ -29,7 +29,8 @@ def build():
     assets = [
         ('background.png', '.'),
         ('app_icon.ico', '.'),
-        ('app_icon.png', '.')
+        ('app_icon.png', '.'),
+        ('icons', 'icons')
     ]
 
     params = [
