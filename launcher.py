@@ -61,7 +61,7 @@ def run_as_admin():
         return False
 
 class EldenRingLauncher(ctk.CTk):
-    VERSION = "1.3.1"
+    VERSION = "1.4.0"
     VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
     MODPACK_VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/modpack.txt"
