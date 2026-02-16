@@ -145,6 +145,36 @@ class EldenRingLauncher(ctk.CTk):
                 "boss_damage_scaling": 0,
                 "boss_posture_scaling": 0,
                 "save_file_extension": "err"
+            },
+            "qol": {
+                "allow_invaders": 1,
+                "death_debuffs": 1,
+                "allow_summons": 1,
+                "overhead_player_display": 4, # Death Count
+                "skip_splash_screens": 0,
+                "default_boot_master_volume": 5,
+                "enemy_health_scaling": 35,
+                "enemy_damage_scaling": 0,
+                "enemy_posture_scaling": 15,
+                "boss_health_scaling": 100,
+                "boss_damage_scaling": 0,
+                "boss_posture_scaling": 20,
+                "save_file_extension": "co2"
+            },
+            "diablo": {
+                "allow_invaders": 1,
+                "death_debuffs": 1,
+                "allow_summons": 1,
+                "overhead_player_display": 4, # Death Count
+                "skip_splash_screens": 0,
+                "default_boot_master_volume": 5,
+                "enemy_health_scaling": 35,
+                "enemy_damage_scaling": 0,
+                "enemy_posture_scaling": 15,
+                "boss_health_scaling": 100,
+                "boss_damage_scaling": 0,
+                "boss_posture_scaling": 20,
+                "save_file_extension": "co2"
             }
         }
         
@@ -163,6 +193,7 @@ class EldenRingLauncher(ctk.CTk):
         self.game_active = False
         self.last_game_mode = "Online"
         self.launch_start_time = 0
+        self.launcher_update_available = False
         self.modpack_update_available = False
         self.last_broadcast_time = 0
         
@@ -190,7 +221,7 @@ class EldenRingLauncher(ctk.CTk):
             self.chat_nickname_var.set(f"Tarnished_{suffix}")
             self.save_config_value("chat_nickname", self.chat_nickname_var.get())
             
-        self.show_chat = self.read_config_value("show_chat", "True") == "True"
+        self.show_chat = True # Default to open on startup as requested
         
         # Pin & Opacity Features
         self.always_on_top_var = ctk.BooleanVar(value=self.read_config_value("always_on_top", "False") == "True")
@@ -214,6 +245,7 @@ class EldenRingLauncher(ctk.CTk):
         self.scroll_frame = None
         self.current_view = "play"
         self.manual_unlock = False
+        self.seamless_from_lobby = False
         
         # Set window size based on chat visibility
         initial_width = 1000 if self.show_chat else 750
@@ -313,15 +345,36 @@ class EldenRingLauncher(ctk.CTk):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         
-        # Calculate x and y coordinates
-        x = (screen_width // 2) - (width // 2)
-        y = (screen_height // 2) - (height // 2)
+        # Side-by-Side positioning if chat is open and we are centering the main window
+        chat_active = getattr(self, 'show_chat', False)
+        chat_window_exists = hasattr(self, 'chat_window') and self.chat_window.winfo_exists()
+        is_main_centered = (width == 1280) # Only apply to main launcher window
         
-        # Ensure it's on screen even if something went wrong
-        if x < 0: x = 0
-        if y < 0: y = 0
+        if chat_active and chat_window_exists and is_main_centered:
+            # Main=1280, Chat=380, Padding=20
+            combined_width = width + 380 + 20
+            start_x = (screen_width // 2) - (combined_width // 2)
+            y = (screen_height // 2) - (height // 2)
+            
+            # Position Main Window (Left side of the group)
+            self.geometry(f'{width}x{height}+{start_x}+{y}')
+            
+            # Position Chat Window (Right side of the group)
+            # Centered vertically relative to the main window
+            chat_x = start_x + width + 20
+            chat_y = y + (height // 2) - (650 // 2)
+            self.chat_window.geometry(f'380x650+{chat_x}+{int(chat_y)}')
+        else:
+            # Normal Centering
+            x = (screen_width // 2) - (width // 2)
+            y = (screen_height // 2) - (height // 2)
+            
+            # Ensure it's on screen even if something went wrong
+            if x < 0: x = 0
+            if y < 0: y = 0
+            
+            self.geometry(f'{width}x{height}+{x}+{y}')
         
-        self.geometry(f'{width}x{height}+{x}+{y}')
         self.lift()      # Bring to front
         self.focus_force() # Force focus
 
@@ -614,7 +667,6 @@ class EldenRingLauncher(ctk.CTk):
             self.show_setup_view()
         else:
             self.show_main_view()
-        self.check_for_modpack_updates() # Check updates immediately after setup
             
         if not self.game_dir:
             self.add_language_selector(self)
@@ -633,12 +685,14 @@ class EldenRingLauncher(ctk.CTk):
             # Just make sure window is visible
             if self.attributes("-alpha") < 1.0:
                 self.attributes("-alpha", 1.0)
+            # Ensure background tasks run if we skip fade (e.g. language/scaling change)
+            self.start_background_tasks()
 
     def show_setup_view(self):
         # Create/Restore overlay for setup
-        self.overlay = ctk.CTkFrame(self, fg_color="#151515", bg_color="transparent", corner_radius=15,
+        self.overlay = ctk.CTkFrame(self, fg_color="#151515", bg_color="transparent", corner_radius=0,
                                     border_width=1, border_color="#d4af37")
-        self.overlay.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.85, relheight=0.9)
+        self.overlay.place(relx=0, rely=0, relwidth=1.0, relheight=1.0)
         
         # Clear overlay for setup
         for widget in self.overlay.winfo_children():
@@ -926,12 +980,15 @@ class EldenRingLauncher(ctk.CTk):
             self.error_admin_btn.pack(pady=10)
 
     def show_bootstrap_ui(self, path):
-        # Hide main view frames if they exist
-        if hasattr(self, 'content_frame'): self.content_frame.place_forget()
-        if hasattr(self, 'sidebar_frame'): self.sidebar_frame.place_forget()
+        # Hide main view frames and sidebars if they exist
+        if hasattr(self, 'content_frame'): self.content_frame.pack_forget()
+        if hasattr(self, 'nav_sidebar'): self.nav_sidebar.pack_forget()
         
-        # Ensure overlay is visible
-        self.overlay.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.85, relheight=0.9)
+        # Ensure overlay exists (it might not if we are not in setup view)
+        if not hasattr(self, 'overlay') or not self.overlay.winfo_exists():
+            self.overlay = ctk.CTkFrame(self, fg_color="#1a1a1a", corner_radius=0, 
+                                        border_width=2, border_color="#d4af37")
+        self.overlay.place(relx=0, rely=0, relwidth=1.0, relheight=1.0)
         self.overlay.configure(fg_color="#151515", border_width=1)
 
         # Clear overlay for bootstrap
@@ -1134,7 +1191,6 @@ class EldenRingLauncher(ctk.CTk):
         nav_items = [
             ("play", self._t("tab_play"), "🎮"),
             ("settings", self._t("tab_settings"), "⚙️"),
-            ("seamless", self._t("tab_seamless"), "🌐"),
             ("tools", self._t("tab_tools"), "🔧"),
             ("about", self._t("tab_about"), "ℹ️")
         ]
@@ -1159,18 +1215,13 @@ class EldenRingLauncher(ctk.CTk):
         # Manage sidebar buttons (e.g. Mod Settings) based on current state
         self.refresh_sidebar_buttons()
         
-        # Update Notifications (Bottom of sidebar) - Placeholder for now
+        # Update Notifications (Bottom of sidebar)
         self.update_notifications_frame = ctk.CTkFrame(self.nav_sidebar, fg_color="transparent")
         self.update_notifications_frame.pack(side="bottom", fill="x", padx=10, pady=(5, 15))
         
-        # --- MAIN CONTENT FRAME ---
-        # Position based on chat visibility
-        if self.show_chat:
-            self.content_frame = ctk.CTkFrame(self, fg_color="#151515", corner_radius=15, border_width=1, border_color="#d4af37")
-            self.content_frame.place(relx=0.22, rely=0.05, relwidth=0.44, relheight=0.9)
-        else:
-            self.content_frame = ctk.CTkFrame(self, fg_color="#151515", corner_radius=15, border_width=1, border_color="#d4af37")
-            self.content_frame.place(relx=0.22, rely=0.05, relwidth=0.76, relheight=0.9)
+        # MAIN CONTENT FRAME (Now always full width without internal chat sidebar)
+        self.content_frame = ctk.CTkFrame(self, fg_color="#151515", corner_radius=15, border_width=1, border_color="#d4af37")
+        self.content_frame.place(relx=0.22, rely=0.05, relwidth=0.76, relheight=0.9)
         
         # Top Header Frame for Title and Toggle
         self.header_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
@@ -1194,15 +1245,15 @@ class EldenRingLauncher(ctk.CTk):
         self.content_container = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         self.content_container.pack(fill="both", expand=True, padx=20, pady=(0, 10))
         
-        # --- CHAT SIDEBAR (Right side) ---
-        self.chat_sidebar = ctk.CTkFrame(self, fg_color="#151515", corner_radius=15, border_width=1, border_color="#d4af37")
+        # Open Chat Window if enabled
         if self.show_chat:
-            self.chat_sidebar.place(relx=0.68, rely=0.05, relwidth=0.30, relheight=0.9)
-        
-        self.setup_chat_sidebar(self.chat_sidebar)
+            self.after(500, self.open_chat_window)
         
         # Setup Footer/Status logic in sidebar
         self.setup_footer_logic()
+        
+        # Refresh any pending notifications (Now that buttons are created in setup_footer_logic)
+        self.refresh_sidebar_notifications()
         
         # Initialize all view frames
         self.setup_all_views()
@@ -1213,8 +1264,6 @@ class EldenRingLauncher(ctk.CTk):
         # Ensure sidebar and content are on top of background
         self.nav_sidebar.lift()
         self.content_frame.lift()
-        if self.show_chat:
-            self.chat_sidebar.lift()
     
     def setup_all_views(self):
         """Create all view frames (hidden initially, shown by switch_view)"""
@@ -1268,6 +1317,21 @@ class EldenRingLauncher(ctk.CTk):
         if hasattr(self, view_attr):
             getattr(self, view_attr).pack(fill="both", expand=True)
 
+        # Contextual updates for specific views
+        if view_id == "mod_settings":
+            self.update_mod_settings_availability()
+        elif view_id == "seamless":
+            self.load_seamless_config()
+
+    def go_back_from_seamless(self):
+        """Handle back navigation from seamless settings."""
+        if getattr(self, 'seamless_from_lobby', False):
+            self.seamless_from_lobby = False
+            self.switch_view("play")
+            self.show_seamless_lobby_view()
+        else:
+            self.switch_view("play")
+
     def add_nav_button(self, view_id, label, icon):
         """Dynamically add a navigation button to the sidebar."""
         if view_id in self.nav_buttons:
@@ -1297,29 +1361,28 @@ class EldenRingLauncher(ctk.CTk):
                 self.switch_view("play")
     
     def setup_play_view(self):
-        """Setup the Play view content"""
-        # Use view_play instead of tab_play
+        """Setup the Play view content with Selection and Detail states."""
         parent = self.view_play
         
-        self.mod_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.mod_frame.pack(pady=10)
+        # Main container for the play view
+        self.play_view_container = ctk.CTkFrame(parent, fg_color="transparent")
+        self.play_view_container.pack(fill="both", expand=True)
         
-        self.mod_label = ctk.CTkLabel(self.mod_frame, text=self._t("mod_label"), font=("Arial", 12, "bold"), text_color="#d4af37")
-        self.mod_label.pack(pady=(0, 5))
+        # Selection State Frame
+        self.selection_view = ctk.CTkFrame(self.play_view_container, fg_color="transparent")
         
-        current_mod = self.read_config_value('modpack', "Vanilla")
-        self.modpack_var.set(current_mod)
+        # Detail State Frame
+        self.detail_view = ctk.CTkFrame(self.play_view_container, fg_color="transparent")
         
-        # Replace SegmentedButton with Icons
-        self.setup_modpack_icons(self.mod_frame)
+        # Setup the selection UI
+        self.mod_label = ctk.CTkLabel(self.selection_view, text=self._t("mod_label"), font=("Cinzel", 16, "bold"), text_color="#d4af37")
+        self.mod_label.pack(pady=(20, 10))
+        
+        self.setup_modpack_icons(self.selection_view)
 
-        # Launch Buttons (conditionally shown based on Reforged installation)
-        self.refresh_launch_buttons()
-
-
-        # Save Converter Section (Moved here for better visibility)
-        self.conv_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.conv_frame.pack(pady=(20, 0), padx=30, fill="x")
+        # Save Converter Section (Moved to selection view)
+        self.conv_frame = ctk.CTkFrame(self.selection_view, fg_color="transparent")
+        self.conv_frame.pack(side="bottom", pady=(20, 10), padx=30, fill="x")
 
         self.conv_var = ctk.StringVar(value=self.read_config_value("auto_save_converter", "0"))
         self.conv_checkbox = ctk.CTkCheckBox(self.conv_frame, text=self._t("save_converter_label"),
@@ -1335,6 +1398,149 @@ class EldenRingLauncher(ctk.CTk):
         self.conv_desc.pack(pady=(0, 5))
 
         self.update_save_converter_state()
+        
+        # Initial view display logic
+        default_mod = self.read_config_value("default_modpack", "")
+        if default_mod:
+            self.after(200, lambda: self.show_modpack_detail(default_mod, initial=True))
+        else:
+            self.show_selection_view()
+
+    def show_selection_view(self):
+        """Display the modpack selection grid."""
+        self.detail_view.pack_forget()
+        self.selection_view.pack(fill="both", expand=True)
+        
+    def show_modpack_detail(self, mod_id, initial=False):
+        """Display the detailed view for a specific modpack."""
+        # Update current modpack
+        self.modpack_var.set(mod_id)
+        self.on_modpack_change(mod_id, skip_save=(initial))
+        
+        # Clear previous detail content
+        for widget in self.detail_view.winfo_children():
+            widget.destroy()
+            
+        self.selection_view.pack_forget()
+        self.detail_view.pack(fill="both", expand=True)
+        
+        # Details Construction
+        mod_info = {
+            "Vanilla": {"display": self._t("vanilla"), "desc": self._t("mod_desc_vanilla"), "icon": "vanilla_upscayl_1x_digital-art-4x.png"},
+            "Reforged": {"display": self._t("reforged"), "desc": self._t("mod_desc_reforged"), "icon": "reforged_upscayl_1x_digital-art-4x.png"},
+            "Quality of Life": {"display": self._t("qol"), "desc": self._t("mod_desc_qol"), "icon": "quality_upscayl_1x_digital-art-4x.png"},
+            "Diablo Loot (RNG)": {"display": self._t("diablo"), "desc": self._t("mod_desc_diablo"), "icon": "diablo_upscayl_1x_digital-art-4x.png"}
+        }.get(mod_id, {"display": mod_id, "desc": "", "icon": ""})
+        
+        # Back Button
+        back_btn = ctk.CTkButton(self.detail_view, text=f"← {self._t('back_to_selection')}", 
+                                 command=self.show_selection_view,
+                                 width=150, height=30, fg_color="#1a1a1a", border_width=1, border_color="#d4af37")
+        back_btn.pack(anchor="nw", padx=20, pady=10)
+        
+        # Main Info area
+        info_frame = ctk.CTkFrame(self.detail_view, fg_color="transparent")
+        info_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        # Large Icon
+        large_icon = self.get_image(os.path.join("icons", mod_info["icon"]), (180, 180))
+        if large_icon:
+            icon_lbl = ctk.CTkLabel(info_frame, image=large_icon, text="")
+            icon_lbl.pack(pady=(10, 10))
+            
+        # Title
+        title_lbl = ctk.CTkLabel(info_frame, text=mod_info["display"], font=("Cinzel", 28, "bold"), text_color="#d4af37")
+        title_lbl.pack(pady=5)
+        
+        # Description (with automatic word wrap)
+        desc_lbl = ctk.CTkLabel(info_frame, text=mod_info["desc"], font=("Arial", 13), text_color="#cccccc", wraplength=480)
+        desc_lbl.pack(pady=10)
+        
+        def update_wrap(event):
+            # Use the frame's width minus padding to update the label's wraplength
+            padding = 40
+            new_wrap = max(100, event.width - padding)
+            if abs(desc_lbl.cget("wraplength") - new_wrap) > 5:
+                desc_lbl.configure(wraplength=new_wrap)
+            
+        info_frame.bind("<Configure>", update_wrap)
+        
+        # Action Buttons Container
+        actions_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+        actions_frame.pack(pady=15, fill="x")
+        
+        # Launch/Install logic is handled by setup_launch_controls_in_detail
+        self.setup_launch_controls_in_detail(actions_frame, mod_id)
+        
+        # Default Toggle
+        self.default_var = ctk.StringVar(value="1" if self.read_config_value("default_modpack", "") == mod_id else "0")
+        
+        def toggle_default():
+            if self.default_var.get() == "1":
+                self.save_config_value("default_modpack", mod_id)
+            else:
+                self.save_config_value("default_modpack", "")
+                
+        default_cb = ctk.CTkCheckBox(info_frame, text=self._t("set_default_btn"),
+                                     variable=self.default_var, onvalue="1", offvalue="0",
+                                     command=toggle_default,
+                                     font=("Arial", 12, "bold"), text_color="#d4af37",
+                                     fg_color="#3e4a3d", hover_color="#4e5b4d")
+        default_cb.pack(pady=10)
+
+    def setup_launch_controls_in_detail(self, parent_frame, mod_id):
+        """Add launch, update, and settings buttons to the detail view."""
+        # Row for launch buttons
+        launch_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        launch_frame.pack(pady=5)
+        
+        # Seamless Launch Button
+        self.detail_seamless_btn = ctk.CTkButton(launch_frame, text=f"🎮 {self._t('seamless_btn')}",
+                                                 command=self.show_seamless_lobby_view,
+                                                 width=180, height=45,
+                                                 font=("Arial", 14, "bold"),
+                                                 fg_color="#3e4a3d", hover_color="#4e5b4d",
+                                                 border_width=1, border_color="#d4af37")
+        self.detail_seamless_btn.pack(side="left", padx=10)
+        
+        # Online Launch Button
+        self.detail_online_btn = ctk.CTkButton(launch_frame, text=f"🎮 {self._t('online_btn')}",
+                                               command=self.launch_online,
+                                               width=180, height=45,
+                                               font=("Arial", 14, "bold"),
+                                               fg_color="#1a1a1a", border_width=2, border_color="#d4af37")
+        self.detail_online_btn.pack(side="left", padx=10)
+        
+        # Update Button (Full width below launch buttons)
+        self.detail_update_btn = ctk.CTkButton(parent_frame, text=self._t("update_available_btn"),
+                                                command=self.perform_modpack_update,
+                                                width=380, height=45,
+                                                font=("Arial", 16, "bold"),
+                                                fg_color="#e15f41", hover_color="#c44569")
+        # will show/hide in refresh_launch_buttons
+        
+        # Row for config buttons
+        config_row = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        config_row.pack(pady=5)
+
+        # Seamless Settings Button
+        seamless_settings_btn = ctk.CTkButton(config_row, text=f"🌐 {self._t('seamless_title')}",
+                                              command=lambda: self.switch_view("seamless"),
+                                              width=185, height=32,
+                                              font=("Arial", 11, "bold"),
+                                              fg_color="#1a1a1a", border_width=1, border_color="#d4af37")
+        seamless_settings_btn.pack(side="left", padx=5)
+        
+        # Mod Settings Button (Same row)
+        if mod_id in ["Reforged", "Quality of Life", "Diablo Loot (RNG)"]:
+            settings_btn = ctk.CTkButton(config_row, text=f"⚙️ {self._t('tab_mod_settings')}",
+                                         command=lambda: self.switch_view("mod_settings"),
+                                         width=185, height=32,
+                                         font=("Arial", 11, "bold"),
+                                         fg_color="#1a1a1a", border_width=1, border_color="#555555")
+            settings_btn.pack(side="left", padx=5)
+        
+        self.refresh_launch_buttons()
     
     def setup_settings_view(self):
         """Setup the Settings view content"""
@@ -1439,129 +1645,120 @@ class EldenRingLauncher(ctk.CTk):
         self.setup_about_tab(parent)
 
     def setup_footer_logic(self):
-        """Initialize status label and update button in the sidebar footer area."""
+        """Initialize status label and update buttons in the sidebar footer area."""
         # Status Label (Inside the update_notifications_frame)
         self.status_label = ctk.CTkLabel(self.update_notifications_frame, text="", 
                                          text_color="gray", font=("Arial", 9), 
                                          wraplength=120)
         self.status_label.pack(side="bottom", pady=5)
         
-        # Create Update Button (Hidden by default)
-        self.update_btn = ctk.CTkButton(self.update_notifications_frame, text="Update Available!", 
+        # Create Launcher Update Button (Hidden by default)
+        self.update_btn = ctk.CTkButton(self.update_notifications_frame, text=self._t("update_available_btn"), 
                                         command=self.perform_update,
                                         width=120, height=30,
-                                        fg_color="#e15f41", hover_color="#c44569",
+                                        fg_color="#1f6aa5", hover_color="#144870",
                                         font=("Arial", 10, "bold"))
-        # update_btn is packed only when show_update_available is called
+        
+        # Create Modpack Update Button (Hidden by default)
+        self.modpack_update_sidebar_btn = ctk.CTkButton(
+            self.update_notifications_frame, 
+            text=self._t("modpack_update_available_btn"),
+            command=self.perform_modpack_update,
+            width=120, height=30,
+            fg_color="#e15f41", hover_color="#c44569",
+            font=("Arial", 10, "bold")
+        )
+        # Buttons are packed only when show_update functions are called via refresh_sidebar_notifications
         
         # Sync modpack settings with actual file state on startup
         self.sync_modpack_settings()
         
     def setup_modpack_icons(self, parent_frame):
-        """Create a visual grid/row for modpack selection with icons."""
+        """Create a visual grid for modpack selection with larger icons."""
         # Container for the cards
         self.cards_container = ctk.CTkFrame(parent_frame, fg_color="transparent")
-        self.cards_container.pack(padx=20, pady=5)
-        
+        self.cards_container.pack(padx=20, pady=10)
+
         self.modpack_cards = {}
-        
+
         modpacks = [
             {"id": "Vanilla", "display": self._t("vanilla"), "color": "#d4af37", "icon": "vanilla_upscayl_1x_digital-art-4x.png"},
             {"id": "Reforged", "display": self._t("reforged"), "color": "#71797e", "icon": "reforged_upscayl_1x_digital-art-4x.png"},
             {"id": "Quality of Life", "display": self._t("qol"), "color": "#3e4a3d", "icon": "quality_upscayl_1x_digital-art-4x.png"},
             {"id": "Diablo Loot (RNG)", "display": self._t("diablo"), "color": "#800000", "icon": "diablo_upscayl_1x_digital-art-4x.png"}
         ]
-        
-        current_mod = self.modpack_var.get()
-        
+
         for i, mod in enumerate(modpacks):
             row = i // 2
             col = i % 2
-            # Smaller card height since we removed the label
-            card = ctk.CTkFrame(self.cards_container, fg_color="#1a1a1a", 
+            
+            # Larger card size
+            card = ctk.CTkFrame(self.cards_container, fg_color="#1a1a1a",
                                 border_width=2, border_color="#333333",
-                                corner_radius=10, width=110, height=100)
-            card.grid(row=row, column=col, padx=8, pady=5)
+                                corner_radius=15, width=160, height=160)
+            card.grid(row=row, column=col, padx=15, pady=15)
             card.pack_propagate(False)
 
-            # Click handler helper
+            # Click handler to show detail
             def make_click_handler(m_id):
-                return lambda e: self.select_modpack_visual(m_id)
-            
-            # Bind to card
+                return lambda e: self.show_modpack_detail(m_id)
+
             card.bind("<Button-1>", make_click_handler(mod["id"]))
-            
-            # Icon (Optimized with Cache)
-            loaded_img = self.get_image(os.path.join("icons", mod["icon"]), (70, 70))
+
+            # Icon (Larger)
+            loaded_img = self.get_image(os.path.join("icons", mod["icon"]), (110, 110))
 
             if loaded_img:
                 icon_lbl = ctk.CTkLabel(card, image=loaded_img, text="")
                 icon_lbl.pack(pady=(15, 5))
                 icon_lbl.bind("<Button-1>", make_click_handler(mod["id"]))
             else:
-                # Fallback to circle placeholder
-                icon_frame = ctk.CTkFrame(card, fg_color=mod["color"], width=60, height=60, corner_radius=30)
+                icon_frame = ctk.CTkFrame(card, fg_color=mod["color"], width=100, height=100, corner_radius=50)
                 icon_frame.pack(pady=(15, 5))
                 initial = mod["display"][0].upper() if mod["display"] else "?"
-                ctk.CTkLabel(icon_frame, text=initial, font=("Cinzel", 28, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
+                ctk.CTkLabel(icon_frame, text=initial, font=("Cinzel", 40, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
                 icon_frame.bind("<Button-1>", make_click_handler(mod["id"]))
-            
-            # REMOVED: Text label below icon (icon already shows the name)
-            
+
+            # Label inside card
+            ctk.CTkLabel(card, text=mod["display"], font=("Cinzel", 14, "bold"), text_color="#d4af37").pack(pady=(0, 10))
+
             self.modpack_cards[mod["id"]] = card
-            
+
         # Highlight initial selection
-        self.update_modpack_card_highlights(current_mod)
+        self.update_modpack_card_highlights(self.modpack_var.get())
 
     def select_modpack_visual(self, mod_id):
-        """Handle clicking a modpack card."""
+        """Handle selection of a modpack from anywhere."""
         self.modpack_var.set(mod_id)
         self.on_modpack_change(mod_id)
-        self.update_modpack_card_highlights(mod_id)
+        self.show_modpack_detail(mod_id)
+
+    def open_mod_settings(self, mod_id):
+        """Set modpack and immediately open settings."""
+        self.modpack_var.set(mod_id)
+        self.on_modpack_change(mod_id)
+        self.switch_view("mod_settings")
 
     def update_modpack_card_highlights(self, selected_id):
         """Update borders and colors for selected/unselected cards."""
-        # Map translated names back to IDs if needed
-        id_map = {
-            self._t("vanilla"): "Vanilla",
-            self._t("reforged"): "Reforged",
-            self._t("qol"): "Quality of Life",
-            self._t("diablo"): "Diablo Loot (RNG)"
-        }
-        
-        # Check if selected_id is a translation or an ID
-        final_id = selected_id
-        if selected_id in id_map:
-            final_id = id_map[selected_id]
-            
+        # No longer highlighting selected modpack - all cards use neutral styling
         for mod_id, card in self.modpack_cards.items():
-            if mod_id == final_id:
-                card.configure(border_color="#d4af37", fg_color="#2a2a2a")
-            else:
-                card.configure(border_color="#333333", fg_color="#1a1a1a")
+            card.configure(border_color="#333333", fg_color="#1a1a1a")
 
     def toggle_chat(self):
-        """Toggle chat visibility and resize window."""
-        self.show_chat = not self.show_chat
-        self.save_config_value("show_chat", str(self.show_chat))
-        
-        # Adjust base widths for sidebar layout:
-        # Sidebar: 0.02-0.20 (width 18%)
-        # Spacing: 0.02
-        # Content: 0.22 onwards
-        
-        
-        if self.show_chat:
-            # Show Chat (Window size fixed at 1280x720)
-            self.content_frame.place(relx=0.22, rely=0.05, relwidth=0.44, relheight=0.9)
-            self.chat_sidebar.place(relx=0.68, rely=0.05, relwidth=0.30, relheight=0.9)
-            self.chat_toggle_btn.configure(text=self._t("chat_hide"))
-        else:
-            # Hide Chat (Window size fixed at 1280x720)
-            if hasattr(self, 'chat_sidebar'):
-                self.chat_sidebar.place_forget()
-            self.content_frame.place(relx=0.22, rely=0.05, relwidth=0.76, relheight=0.9)
+        """Toggle the standalone chat window."""
+        if hasattr(self, 'chat_window') and self.chat_window.winfo_exists():
+            self.chat_window.destroy()
+            self.show_chat = False
             self.chat_toggle_btn.configure(text=self._t("chat_show"))
+            # Re-center main window after closing chat
+            self.center_window(1280, 720)
+        else:
+            self.show_chat = True
+            self.open_chat_window()
+            self.chat_toggle_btn.configure(text=self._t("chat_hide"))
+        
+        self.save_config_value("show_chat", str(self.show_chat))
 
 
     def setup_mod_settings_view(self, parent=None):
@@ -1569,6 +1766,11 @@ class EldenRingLauncher(ctk.CTk):
         if parent is None:
             parent = getattr(self, 'view_mod_settings', self)
             
+        # Back Button
+        back_btn = ctk.CTkButton(parent, text=f"← {self._t('back_to_selection')}", 
+                                 command=lambda: self.switch_view("play"),
+                                 width=120, height=30, fg_color="#1a1a1a", border_width=1, border_color="#d4af37")
+        back_btn.pack(anchor="nw", padx=20, pady=10)
         # Container frame for the grid
         self.qol_container = ctk.CTkFrame(parent, fg_color="transparent")
         self.qol_container.pack(fill="both", expand=True, padx=10, pady=5)
@@ -1897,11 +2099,10 @@ class EldenRingLauncher(ctk.CTk):
 
     def toggle_always_on_top(self):
         is_on = self.always_on_top_var.get()
-        # Only apply immediately if currently in lockdown
+        # Apply to chat window if in lockdown, otherwise main window doesn't use it
         if getattr(self, '_launcher_locked_state', False):
-            self.attributes("-topmost", is_on)
-        else:
-            self.attributes("-topmost", False)
+            if hasattr(self, 'chat_window') and self.chat_window.winfo_exists():
+                self.chat_window.attributes("-topmost", is_on)
         self.save_config_value("always_on_top", str(is_on))
 
     def toggle_always_on_top_btn(self):
@@ -1918,9 +2119,10 @@ class EldenRingLauncher(ctk.CTk):
 
     def on_opacity_change(self, value):
         self.save_config_value("ingame_opacity", f"{value:.2f}")
-        # Apply immediately if currently in lockdown
+        # Apply to chat window if currently in lockdown
         if getattr(self, '_launcher_locked_state', False):
-            self.attributes("-alpha", value)
+            if hasattr(self, 'chat_window') and self.chat_window.winfo_exists():
+                self.chat_window.attributes("-alpha", value)
 
     def on_window_configure(self, event):
         """Save window position if moved during lockdown."""
@@ -1940,16 +2142,55 @@ class EldenRingLauncher(ctk.CTk):
     def on_focus_in(self, event):
         """Increase opacity when window is focused during gameplay."""
         if getattr(self, '_launcher_locked_state', False):
-            # Use 0.95 for a solid but slightly soft look
-            self.attributes("-alpha", 0.95)
+            target = getattr(self, 'chat_window', self)
+            if hasattr(target, 'winfo_exists') and target.winfo_exists():
+                target.attributes("-alpha", 0.95)
 
     def on_focus_out(self, event):
         """Restore translucency when window loses focus during gameplay."""
         if getattr(self, '_launcher_locked_state', False):
-            self.attributes("-alpha", self.ingame_opacity_var.get())
+            target = getattr(self, 'chat_window', self)
+            if hasattr(target, 'winfo_exists') and target.winfo_exists():
+                target.attributes("-alpha", self.ingame_opacity_var.get())
 
-    def setup_chat_sidebar(self, parent):
-        """Setup the UI for the Global Chat Sidebar."""
+    def open_chat_window(self):
+        """Open or focus the standalone chat window."""
+        if hasattr(self, 'chat_window') and self.chat_window.winfo_exists():
+            self.chat_window.focus()
+            return
+
+        self.chat_window = ctk.CTkToplevel(self)
+        self.chat_window.title(self._t("app_title") + " - Global Chat")
+        self.chat_window.geometry("380x650")
+        self.chat_window.protocol("WM_DELETE_WINDOW", self.on_chat_window_close)
+        
+        # Bind focus events for in-game translucency effects
+        self.chat_window.bind("<FocusIn>", self.on_focus_in)
+        self.chat_window.bind("<FocusOut>", self.on_focus_out)
+        
+        # UI Setup
+        self.chat_window.configure(fg_color="#151515")
+        self.setup_chat_ui(self.chat_window)
+        
+        # Lift and focus
+        self.chat_window.lift()
+        self.chat_window.focus()
+        
+        # Side-by-side centering
+        self.center_window(1280, 720)
+
+    def on_chat_window_close(self):
+        """Handle chat window closing."""
+        self.show_chat = False
+        self.save_config_value("show_chat", "False")
+        if hasattr(self, 'chat_toggle_btn'):
+            self.chat_toggle_btn.configure(text=self._t("chat_show"))
+        self.chat_window.destroy()
+        # Re-center main window after closing chat
+        self.center_window(1280, 720)
+
+    def setup_chat_ui(self, parent):
+        """Setup the UI for the Global Chat (Standalone or Sidebar compatible)."""
         
         # Reset color tags state since we are creating a fresh text widget
         if hasattr(self, 'created_color_tags'):
@@ -2116,9 +2357,12 @@ class EldenRingLauncher(ctk.CTk):
             # Update wraplength to be slightly smaller than the current width
             new_width = event.width - 40
             if new_width > 0:
-                desc_label.configure(wraplength=new_width)
+                # Add threshold check to prevent jumps (only update if change is significant)
+                # and avoid binding the label to its own resize event
+                if abs(desc_label.cget("wraplength") - new_width) > 5:
+                    desc_label.configure(wraplength=new_width)
         
-        desc_label.bind("<Configure>", update_wrap_length)
+        content_col.bind("<Configure>", update_wrap_length)
 
         # --- Support Section ---
         ctk.CTkLabel(content_col, text=self._t("about_support_title"), font=("Arial", 16, "bold"), text_color="#d4af37").pack(pady=(10, 10))
@@ -2829,17 +3073,18 @@ class EldenRingLauncher(ctk.CTk):
                 pass
         return None
 
-    def on_modpack_change(self, value):
+    def on_modpack_change(self, value, skip_save=False):
         # Ensure variable is updated immediately to prevent race conditions in config loading
         self.modpack_var.set(value)
         
-        # Map translated value back to internal key
+        # Map value back to internal key. Handle both translated and internal strings.
         internal_key = "Vanilla"
-        if value == self._t("reforged"): internal_key = "Reforged"
-        elif value == self._t("qol"): internal_key = "Quality of Life"
-        elif value == self._t("diablo"): internal_key = "Diablo Loot (RNG)"
+        if value in ["Reforged", self._t("reforged")]: internal_key = "Reforged"
+        elif value in ["Quality of Life", self._t("qol")]: internal_key = "Quality of Life"
+        elif value in ["Diablo Loot (RNG)", self._t("diablo")]: internal_key = "Diablo Loot (RNG)"
         
-        self.save_config_value("modpack", internal_key)
+        if not skip_save:
+            self.save_config_value("modpack", internal_key)
         self.update_status(f"{self._t('mod_label')} {value}")
         self.update_save_converter_state()
         
@@ -2862,6 +3107,7 @@ class EldenRingLauncher(ctk.CTk):
             
         # Sync settings regardless of whether we applied the modpack (e.g. if game running)
         self.sync_modpack_settings()
+        self.update_mod_settings_availability()
 
         # Send status update to chat server if connected
         self.broadcast_status()
@@ -3354,6 +3600,14 @@ class EldenRingLauncher(ctk.CTk):
         ctk.CTkButton(btn_frame, text=self._t("btn_host_private"), command=self.host_private_lobby,
                        fg_color="#1a1a1a", hover_color="#333333", height=40, width=150, font=("Arial", 12, "bold"),
                        border_width=1, border_color="#d4af37").pack(side="left", padx=10)
+        
+        def go_to_seamless_settings_from_lobby():
+            self.seamless_from_lobby = True
+            self.switch_view("seamless")
+
+        ctk.CTkButton(btn_frame, text=f"⚙️ {self._t('tab_seamless')}", command=go_to_seamless_settings_from_lobby,
+                       fg_color="#1a1a1a", hover_color="#333333", height=40, width=150, font=("Arial", 12, "bold"),
+                       border_width=1, border_color="#555555").pack(side="left", padx=10)
                        
         ctk.CTkButton(btn_frame, text=self._t("back_btn"), command=self.close_lobby_overlay,
                        fg_color="#333333", hover_color="#444444", height=40, width=100).pack(side="right", padx=10)
@@ -3515,12 +3769,11 @@ class EldenRingLauncher(ctk.CTk):
 
     def show_reforged_download_ui(self):
         """Show download progress UI for Reforged modpack."""
-        # Hide launch buttons temporarily
-        if hasattr(self, 'button_frame'):
-            self.button_frame.pack_forget()
+        # Safety check - determine parent (Detail View if active, else view_play)
+        is_detail = hasattr(self, 'detail_view') and self.detail_view.winfo_exists() and self.detail_view.winfo_ismapped()
+        parent = self.detail_view if is_detail else getattr(self, 'view_play', self)
         
         if not hasattr(self, 'reforged_progress_frame') or not self.reforged_progress_frame.winfo_exists():
-            parent = getattr(self, 'view_play', self)
             self.reforged_progress_frame = ctk.CTkFrame(parent, fg_color="transparent")
             self.reforged_progress_frame.pack(pady=15)
             
@@ -3536,7 +3789,7 @@ class EldenRingLauncher(ctk.CTk):
             self.reforged_progress_bar.pack(pady=10)
             self.reforged_progress_bar.set(0)
         else:
-            # Just ensure it's packed if it was hidden/forgotten
+            # Just ensure it's packed
             self.reforged_progress_frame.pack(pady=15)
 
         
@@ -3672,166 +3925,49 @@ class EldenRingLauncher(ctk.CTk):
 
     def refresh_sidebar_buttons(self):
         """Manage visibility of conditional navigation buttons in the sidebar."""
-        # Get internal modpack key
-        current_val = self.modpack_var.get()
-        internal_key = "Vanilla"
-        if current_val == self._t("reforged") or current_val == "Reforged": internal_key = "Reforged"
-        elif current_val == self._t("qol") or current_val == "Quality of Life": internal_key = "Quality of Life"
-        elif current_val == self._t("diablo") or current_val == "Diablo Loot (RNG)": internal_key = "Diablo Loot (RNG)"
-        
-        # Mod Settings button is available for Reforged, QoL, and Diablo Loot
-        if internal_key in ["Reforged", "Quality of Life", "Diablo Loot (RNG)"]:
-            self.add_nav_button("mod_settings", self._t("tab_mod_settings"), "🛠️")
-        else:
-            self.remove_nav_button("mod_settings")
+        # Mod Settings is now handled within the Play view cards and detail screen.
+        # Removing from sidebar to keep it contextually relevant.
+        self.remove_nav_button("mod_settings")
 
     def refresh_launch_buttons(self):
-        """Refresh the launch buttons area to show appropriate UI based on Reforged installation."""
-        # Safety check - ensure view_play exists
-        parent = getattr(self, 'view_play', None)
-        if not parent or not parent.winfo_exists():
+        """Refresh the launch buttons area to show appropriate UI based on modpack installation/updates."""
+        # Check if we are currently in the detail view context
+        is_detail_view = hasattr(self, 'detail_view') and self.detail_view.winfo_exists()
+        
+        if is_detail_view:
+            update_btn = getattr(self, 'detail_update_btn', None)
+            seamless_btn = getattr(self, 'detail_seamless_btn', None)
+            online_btn = getattr(self, 'detail_online_btn', None)
+            
+            # Determine desired state
+            current_val = self.modpack_var.get()
+            is_reforged = (current_val == "Reforged")
+            is_installed = self.is_reforged_installed() if is_reforged else True
+            has_update = getattr(self, 'modpack_update_available', False)
+            
+            if update_btn and update_btn.winfo_exists():
+                if is_reforged and not is_installed:
+                    update_btn.configure(text=self._t("download_reforged"))
+                    update_btn.pack(pady=10)
+                    if seamless_btn: seamless_btn.pack_forget()
+                    if online_btn: online_btn.pack_forget()
+                else:
+                    update_btn.pack_forget()
+                    if seamless_btn: 
+                        seamless_btn.pack_forget()
+                        seamless_btn.pack(side="left", padx=10)
+                    if online_btn: 
+                        online_btn.pack_forget()
+                        online_btn.pack(side="left", padx=10)
             return
 
-        # Determine desired state
-        current_val = self.modpack_var.get()
-        is_reforged = (current_val == self._t("reforged") or current_val == "Reforged")
-        
-        # Check download status
-        if is_reforged and getattr(self, 'download_in_progress', False):
-             desired_mode = "downloading"
-        elif is_reforged and not self.is_reforged_installed():
-             desired_mode = "download"
-        else:
-             desired_mode = "standard"
-        
-        # Check if update is needed
-        if hasattr(self, 'current_launch_mode') and self.current_launch_mode == desired_mode:
-            # Check if update status changed
-            last_update_state = getattr(self, '_last_modpack_update_state', False)
-            current_update_state = getattr(self, 'modpack_update_available', False)
-            
-            if last_update_state == current_update_state:
-                # Check if button frame exists (might have been destroyed externally)
-                if desired_mode == "downloading":
-                     # Ensure progress UI is visible
-                     if hasattr(self, 'reforged_progress_frame') and self.reforged_progress_frame.winfo_exists():
-                         return
-                elif hasattr(self, 'button_frame') and self.button_frame.winfo_exists():
-                    return
-        
-        # Store current update state for next check
-        self._last_modpack_update_state = getattr(self, 'modpack_update_available', False)
-        
-        # Update current mode
-        self.current_launch_mode = desired_mode
-        
-        # Remove progress frame if it exists AND we are NOT downloading
-        if desired_mode != "downloading":
-            if hasattr(self, 'reforged_progress_frame'):
-                try:
-                    if self.reforged_progress_frame.winfo_exists():
-                        self.reforged_progress_frame.destroy()
-                except:
-                    pass
-        
-        # Remove existing button frame and its children
+        # Selection Grid Mode: No launch buttons should be visible here
+        # Clean up any legacy button frames if drifting through selection view
         if hasattr(self, 'button_frame'):
             try:
                 if self.button_frame.winfo_exists():
                     self.button_frame.destroy()
-            except:
-                pass
-        
-        # Also clean up old column frames if they exist
-        for attr in ['seamless_col', 'online_col', 'seamless_btn', 'online_btn', 'seamless_desc', 'online_desc']:
-            if hasattr(self, attr):
-                try:
-                    widget = getattr(self, attr)
-                    if widget.winfo_exists():
-                        widget.destroy()
-                except:
-                    pass
-        
-        if desired_mode == "downloading":
-            # Restore download UI
-            self.show_reforged_download_ui()
-            return
-
-        # Recreate button frame for buttons
-        self.button_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        
-        # Pack before the Save Converter section if it exists and is currently managed by pack
-        # This prevents the buttons from disappearing if conv_frame is hidden (pack_forget)
-        is_managed = False
-        if hasattr(self, 'conv_frame') and self.conv_frame.winfo_exists():
-            try:
-                if self.conv_frame.winfo_manager() == 'pack':
-                    is_managed = True
-            except:
-                pass
-
-        if is_managed:
-            self.button_frame.pack(pady=15, before=self.conv_frame)
-        else:
-            self.button_frame.pack(pady=15)
-        
-        if desired_mode == "download":
-            # Show download button
-            download_btn = ctk.CTkButton(self.button_frame, 
-                                         text=self._t("download_reforged"),
-                                         command=self.download_reforged_modpack,
-                                         height=45, width=380,
-                                         font=("Arial", 14, "bold"),
-                                         fg_color="#3e4a3d", hover_color="#4e5b4d",
-                                         border_width=1, border_color="#d4af37")
-            download_btn.pack(pady=10)
-        else:
-            # Check for modpack updates
-            has_update = getattr(self, 'modpack_update_available', False)
-            if has_update:
-                btn_text = self._t("modpack_update_available_btn")
-                # If modpack.txt is missing, try to use a more descriptive "Install" text if desired
-                # for now keeping same button but ensuring it's visible
-                
-                modpack_update_btn = ctk.CTkButton(self.button_frame, 
-                                                  text=btn_text,
-                                                  command=self.perform_modpack_update,
-                                                  fg_color="#e15f41", hover_color="#c44569",
-                                                  height=40, width=380,
-                                                  font=("Arial", 12, "bold"))
-                modpack_update_btn.pack(pady=(0, 10))
-
-            # Show normal launch buttons
-            # Seamless Column
-            self.seamless_col = ctk.CTkFrame(self.button_frame, fg_color="transparent")
-            self.seamless_col.pack(side="left", padx=10)
-
-            self.seamless_btn = ctk.CTkButton(self.seamless_col, text=self._t("seamless_btn"), 
-                                              command=self.show_seamless_lobby_view,
-                                              height=45, width=180,
-                                              font=("Arial", 14, "bold"),
-                                              fg_color="#3e4a3d", hover_color="#4e5b4d",
-                                              border_width=1, border_color="#d4af37")
-            self.seamless_btn.pack()
-            
-            self.seamless_desc = ctk.CTkLabel(self.seamless_col, text=self._t("seamless_desc"), 
-                                              font=("Arial", 9), text_color="#aaaaaa")
-            self.seamless_desc.pack(pady=(5, 0))
-
-            # Online Column
-            self.online_col = ctk.CTkFrame(self.button_frame, fg_color="transparent")
-            self.online_col.pack(side="left", padx=10)
-
-            self.online_btn = ctk.CTkButton(self.online_col, text=self._t("online_btn"), 
-                                            command=self.launch_online,
-                                            height=45, width=180,
-                                            font=("Arial", 14, "bold"),
-                                            fg_color="#1a1a1a", border_width=2, border_color="#d4af37")
-            self.online_btn.pack()
-
-            self.online_desc = ctk.CTkLabel(self.online_col, text=self._t("online_desc"), 
-                                            font=("Arial", 9), text_color="#aaaaaa")
-            self.online_desc.pack(pady=(5, 0))
+            except: pass
 
 
 
@@ -3851,7 +3987,7 @@ class EldenRingLauncher(ctk.CTk):
             self.show_bootstrap_ui(self.game_dir)
 
     def set_lockdown(self, locked):
-        """Resize window to show only chat when game is running."""
+        """Minimize launcher and show chat on top when game is running."""
         # Manual Override: If user clicked Restore, don't re-lock while game is still running
         if locked and getattr(self, 'manual_unlock', False):
             return
@@ -3862,85 +3998,56 @@ class EldenRingLauncher(ctk.CTk):
             
         self._launcher_locked_state = locked
         
+        chat_exists = hasattr(self, 'chat_window') and self.chat_window.winfo_exists()
+
         if locked:
-            print("Game running: Entering Chat-Only Lockdown mode.")
-            # Hide the main content frame
-            if hasattr(self, 'content_frame'):
-                self.content_frame.place_forget()
+            print("Game running: Minimizing launcher and focusing chat.")
             
-            # Show and expand sidebar frame to fill the window
-            if hasattr(self, 'sidebar_frame'):
-                # Resize window to sidebar width
-                if self.lockdown_pos_x and self.lockdown_pos_y:
-                    try:
-                        self.geometry(f"340x650+{self.lockdown_pos_x}+{self.lockdown_pos_y}")
-                    except:
-                        self.geometry("340x650")
-                        self.center_window(340, 650)
-                else:
-                    self.geometry("340x650")
-                    self.center_window(340, 650)
-                
-                # Fill entire window in lockdown
-                self.sidebar_frame.place(relx=0.0, rely=0.0, relwidth=1.0, relheight=1.0)
-                
-                # Update: Show lockdown notice and restore button in chat
-                # Safety check: ensure the anchor widget exists and is packed
-                anchor = getattr(self, 'chat_nick_entry', None)
-                if anchor and anchor.winfo_exists():
-                    try:
-                        if hasattr(self, 'chat_lockdown_notice'):
-                            self.chat_lockdown_notice.pack(fill="x", padx=15, pady=(2, 0), before=anchor)
-                        if hasattr(self, 'restore_view_btn'):
-                            self.restore_view_btn.pack(fill="x", padx=15, pady=(0, 5), before=anchor)
-                    except:
-                        # Fallback if 'before' tag fails (e.g. not packed yet)
-                        if hasattr(self, 'chat_lockdown_notice'):
-                            self.chat_lockdown_notice.pack(fill="x", padx=15, pady=(2, 0))
-                        if hasattr(self, 'restore_view_btn'):
-                            self.restore_view_btn.pack(fill="x", padx=15, pady=(0, 5))
-                
-                # Apply Opacity
-                self.attributes("-alpha", self.ingame_opacity_var.get())
-                
-                # Apply Always on Top
+            # Minimize the main launcher window
+            self.iconify()
+            
+            # Apply Opacity and Topmost to Chat Window if it exists
+            if chat_exists:
+                self.chat_window.attributes("-alpha", self.ingame_opacity_var.get())
                 if self.always_on_top_var.get():
-                    self.attributes("-topmost", True)
+                    self.chat_window.attributes("-topmost", True)
+                
+                # Show lockdown notice in chat if needed
+                if hasattr(self, 'chat_lockdown_notice') and self.chat_lockdown_notice.winfo_exists():
+                    self.chat_lockdown_notice.pack(fill="x", padx=15, pady=(2, 0))
         else:
-            # Only print if we are actually coming from a locked state (or first time)
-            if getattr(self, '_launcher_locked_state', False) or not hasattr(self, '_launcher_locked_state'):
-                 print("Game stopped or Manual Restore: Restoring Full View.")
+            print("Game stopped or Manual Restore: Restoring Full View.")
+            
             # Reset manual unlock when game stops
             if not self.is_game_running():
                 self.manual_unlock = False
 
-            # Restore Opacity & Pin
-            # Safety: Only force alpha 1.0 if we are not in the middle of fade-in
+            # Restore the main launcher window
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            
+            # Restore Opacity & Pin for main window
             current_alpha = self.attributes("-alpha")
             if current_alpha > 0.9 or not getattr(self, '_fade_in_running', False):
                  self.attributes("-alpha", 1.0)
-
             self.attributes("-topmost", False)
-            
-            # Update: Hide lockdown notice and restore button
-            if hasattr(self, 'chat_lockdown_notice'):
-                self.chat_lockdown_notice.pack_forget()
-            if hasattr(self, 'restore_view_btn'):
-                self.restore_view_btn.pack_forget()
 
-            # Restore window size and frames based on normal chat visibility
+            # Reset Chat Window settings to default
+            if chat_exists:
+                self.chat_window.attributes("-alpha", 1.0)
+                self.chat_window.attributes("-topmost", False)
+                if hasattr(self, 'chat_lockdown_notice') and self.chat_lockdown_notice.winfo_exists():
+                    self.chat_lockdown_notice.pack_forget()
+            # Consistent with toggle_chat logic (Fixed 1280x720)
             # Restore window size and frames based on normal chat visibility
             # Consistent with toggle_chat logic (Fixed 1280x720)
-            if self.show_chat:
-                if hasattr(self, 'content_frame'):
-                    self.content_frame.place(relx=0.22, rely=0.05, relwidth=0.44, relheight=0.9)
-                if hasattr(self, 'chat_sidebar'):
-                    self.chat_sidebar.place(relx=0.68, rely=0.05, relwidth=0.30, relheight=0.9)
-            else:
+            if hasattr(self, 'content_frame'):
+                self.content_frame.place(relx=0.22, rely=0.05, relwidth=0.76, relheight=0.9)
+            
+            if not self.show_chat:
                 if hasattr(self, 'chat_sidebar'):
                     self.chat_sidebar.place_forget()
-                if hasattr(self, 'content_frame'):
-                    self.content_frame.place(relx=0.22, rely=0.05, relwidth=0.76, relheight=0.9)
             
             self.center_window(1280, 720)
 
@@ -3971,27 +4078,30 @@ class EldenRingLauncher(ctk.CTk):
                     self.after(0, lambda: self.show_update_available(remote_version))
                 else:
                     # Ensure update button is hidden if versions match (e.g. after update)
-                    if hasattr(self, 'update_btn'):
-                        self.after(0, lambda: self.update_btn.pack_forget())
+                    self.launcher_update_available = False
+                    self.after(0, self.refresh_sidebar_notifications)
                     
             except Exception as e:
                 print(f"Update check failed: {e}")
+            finally:
+                self.update_check_running = False
 
         threading.Thread(target=check, daemon=True).start()
 
     def show_update_available(self, new_version):
         """Show the update button in the UI (Sidebar Footer)."""
+        self.launcher_update_available = True
+        self.refresh_sidebar_notifications()
+        
         if hasattr(self, 'update_btn'):
-            self.update_btn.configure(text=self._t("update_available_btn"))
-            if not self.update_btn.winfo_ismapped():
-                self.update_btn.pack(side="top", pady=5)
-            
-            # Flash effect or highlight
-            self.update_btn.configure(fg_color="#e15f41", hover_color="#c44569")
+            self.refresh_sidebar_notifications() # Color is now managed here
 
     def perform_update(self):
         """Handle update process in a background thread."""
-        self.update_btn.configure(text="Downloading...", state="disabled")
+        self.launcher_update_available = False # Hide button from sidebar
+        self.refresh_sidebar_notifications()
+        if hasattr(self, 'update_btn'):
+            self.update_btn.configure(text="Downloading...", state="disabled")
         threading.Thread(target=self._run_update_task, daemon=True).start()
 
     def _run_update_task(self):
@@ -4048,7 +4158,7 @@ del "%~f0"
 
     def _handle_update_failure(self, error):
         self.update_btn.configure(text="Update Failed!", fg_color="red", state="normal")
-        self.after(3000, lambda: self.update_btn.configure(text=self._t("update_available_btn"), fg_color="#e15f41"))
+        self.after(3000, lambda: self.refresh_sidebar_notifications()) # Restores text and correct color
         print(f"Detailed Error: {error}")
 
     def check_for_modpack_updates(self):
@@ -4092,9 +4202,12 @@ del "%~f0"
                     if getattr(self, 'modpack_update_available', False):
                         self.modpack_update_available = False
                         self.after(0, self.refresh_launch_buttons)
+                        self.after(0, self.refresh_sidebar_notifications)
                 
             except Exception as e:
                 print(f"[UPDATE] Modpack update check failed: {e}")
+            finally:
+                self.modpack_update_check_running = False
 
         threading.Thread(target=check, daemon=True).start()
 
@@ -4102,21 +4215,40 @@ del "%~f0"
         """Set update flag and refresh UI (Play view + Sidebar Footer)."""
         self.modpack_update_available = True
         self.refresh_launch_buttons()
-        
-        # Also show a compact notification in the sidebar footer if not already there
-        if not hasattr(self, 'modpack_update_sidebar_btn') or not self.modpack_update_sidebar_btn.winfo_exists():
-            self.modpack_update_sidebar_btn = ctk.CTkButton(self.update_notifications_frame, 
-                                                            text=self._t("modpack_update_available_btn"),
-                                                            command=self.perform_modpack_update,
-                                                            width=120, height=25,
-                                                            fg_color="#e15f41", hover_color="#c44569",
-                                                            font=("Arial", 9, "bold"))
-            self.modpack_update_sidebar_btn.pack(side="top", pady=2)
+        self.refresh_sidebar_notifications()
+
+    def refresh_sidebar_notifications(self):
+        """Manage visibility of sidebar notification buttons based on current state."""
+        if not hasattr(self, 'update_notifications_frame') or not self.update_notifications_frame.winfo_exists():
+            return
+            
+        # Launcher Update Notification (BLUE)
+        if getattr(self, 'launcher_update_available', False):
+            if hasattr(self, 'update_btn') and self.update_btn.winfo_exists():
+                self.update_btn.configure(text=self._t("update_available_btn"), 
+                                          fg_color="#1f6aa5", hover_color="#144870")
+                if not self.update_btn.winfo_ismapped():
+                    self.update_btn.pack(side="top", pady=5)
+        else:
+            if hasattr(self, 'update_btn') and self.update_btn.winfo_exists():
+                self.update_btn.pack_forget()
+
+        # Modpack Update Notification (RED)
+        if getattr(self, 'modpack_update_available', False):
+            if hasattr(self, 'modpack_update_sidebar_btn') and self.modpack_update_sidebar_btn.winfo_exists():
+                self.modpack_update_sidebar_btn.configure(text=self._t("modpack_update_available_btn"),
+                                                         fg_color="#e15f41", hover_color="#c44569")
+                if not self.modpack_update_sidebar_btn.winfo_ismapped():
+                    self.modpack_update_sidebar_btn.pack(side="top", pady=5)
+        else:
+            if hasattr(self, 'modpack_update_sidebar_btn') and self.modpack_update_sidebar_btn.winfo_exists():
+                self.modpack_update_sidebar_btn.pack_forget()
 
     def perform_modpack_update(self):
         """Trigger update by calling repair_modpack."""
         self.modpack_update_available = False # Hide button
         self.refresh_launch_buttons()
+        self.refresh_sidebar_notifications() # Ensure button is hidden immediately
         self.repair_modpack()
 
     # --- SEAMLESS CO-OP SETTINGS ---
@@ -4126,6 +4258,11 @@ del "%~f0"
         if parent is None:
             parent = self.view_seamless
             
+        # Back Button
+        back_btn = ctk.CTkButton(parent, text=f"← {self._t('back_to_selection')}", 
+                                 command=self.go_back_from_seamless,
+                                 width=120, height=30, fg_color="#1a1a1a", border_width=1, border_color="#d4af37")
+        back_btn.pack(anchor="nw", padx=20, pady=10)
         # Create a scrollable frame for settings
         self.seamless_scroll = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         self.seamless_scroll.pack(fill="both", expand=True, padx=5, pady=5)
@@ -4234,18 +4371,25 @@ del "%~f0"
             ctk.CTkLabel(frame, text=desc_text, font=("Arial", 10), text_color="gray").pack(anchor="w", pady=(0, 5))
 
     def get_config_prefix(self):
-        """Get prefix for persistent settings. Reforged is separate, others share 'vanilla_'."""
-        # Read from config directly to avoid timing issues on startup
+        """Get prefix for persistent settings. Each modpack has its own prefix."""
         current_val = self.read_config_value('modpack', "Vanilla")
-        # Check against internal name (config stores "Reforged", not translated)
-        if current_val == "Reforged": 
-            return "reforged_"
-        # All other modpacks (Vanilla, QoL, Diablo, etc.) share the same settings
-        return "vanilla_"
+        prefix_map = {
+            "Vanilla": "vanilla_",
+            "Reforged": "reforged_",
+            "Quality of Life": "qol_",
+            "Diablo Loot (RNG)": "diablo_"
+        }
+        return prefix_map.get(current_val, "vanilla_")
 
     def load_seamless_config(self):
         """Load values from launcher_config.ini (persistent w/ modpack prefix) or fallback."""
         self.loading_seamless = True # LOCK: Prevent auto-saves while loading UI
+        
+        # SAFETY CHECK: If seamless_widgets is not initialized (e.g. during bootstrap),
+        # we cannot load values into UI. Just return.
+        if not hasattr(self, 'seamless_widgets') or not self.seamless_widgets:
+            self.loading_seamless = False
+            return
         
         prefix = self.get_config_prefix()
             
