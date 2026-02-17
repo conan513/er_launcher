@@ -60,18 +60,169 @@ def run_as_admin():
         print(f"Elevation failed: {e}")
         return False
 
+
+class BackupManager:
+    def __init__(self, launcher):
+        self.launcher = launcher
+        self.max_backups = 5
+        
+        # Use the config directory for backups logic:
+        # APPDATA/ERLauncher/backups
+        appdata = os.getenv('APPDATA')
+        self.config_dir = os.path.join(appdata, "ERLauncher")
+        self.backup_base_dir = os.path.join(self.config_dir, "backups") # Backups stored here
+
+    def perform_backup(self, backup_type):
+        """Creates a backup of the save files."""
+        if not hasattr(self.launcher, 'get_steam_id64'):
+             return
+
+        save_dir = self.launcher.get_steam_id64()
+        if not save_dir:
+            print(f"[Backup] Save directory not found inside get_steam_id64 logic.")
+            return
+
+        # Double check existence (get_steam_id64 might verify, but let's be safe)
+        if not os.path.exists(save_dir):
+            print(f"[Backup] Save directory path does not exist: {save_dir}")
+            return
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        dest_dir = os.path.join(self.backup_base_dir, backup_type, timestamp)
+
+        try:
+            shutil.copytree(save_dir, dest_dir)
+            print(f"[Backup] {backup_type} backup created: {dest_dir}")
+            self._prune_backups(backup_type)
+        except Exception as e:
+            print(f"[Backup] Failed to create {backup_type} backup: {e}")
+
+    def _prune_backups(self, backup_type):
+        type_dir = os.path.join(self.backup_base_dir, backup_type)
+        if not os.path.exists(type_dir):
+            return
+
+        backups = []
+        for name in os.listdir(type_dir):
+            path = os.path.join(type_dir, name)
+            if os.path.isdir(path):
+                backups.append(path)
+        
+        backups.sort(key=lambda x: os.path.basename(x))
+
+        while len(backups) > self.max_backups:
+            to_remove = backups.pop(0)
+            try:
+                shutil.rmtree(to_remove)
+                print(f"[Backup] Pruned old backup: {to_remove}")
+            except Exception as e:
+                print(f"[Backup] Failed to prune {to_remove}: {e}")
+
+    def get_backups(self, backup_type=None):
+        backups_list = []
+        if backup_type is None:
+             # List all subdirectories in backup_base_dir as types
+             if os.path.exists(self.backup_base_dir):
+                 types = [d for d in os.listdir(self.backup_base_dir) if os.path.isdir(os.path.join(self.backup_base_dir, d))]
+             else:
+                 types = []
+        else:
+             types = [backup_type]
+
+        for b_type in types:
+            type_dir = os.path.join(self.backup_base_dir, b_type)
+            if not os.path.exists(type_dir):
+                continue
+            
+            for name in os.listdir(type_dir):
+                path = os.path.join(type_dir, name)
+                if os.path.isdir(path):
+                    try:
+                        time_obj = datetime.strptime(name, "%Y-%m-%d_%H-%M-%S")
+                        display_time = time_obj.strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        display_time = name
+
+                    backups_list.append({
+                        "id": f"{b_type}_{name}",
+                        "type": b_type,
+                        "timestamp": name,
+                        "display_time": display_time,
+                        "path": path,
+                        "name": name
+                    })
+        
+        backups_list.sort(key=lambda x: x['timestamp'], reverse=True)
+        return backups_list
+
+    def restore_backup(self, backup_path):
+        save_dir = self.launcher.get_steam_id64()
+        if not save_dir:
+            return False, "Save directory not found."
+
+        if not os.path.exists(backup_path):
+            return False, "Backup source not found."
+            
+        try:
+            # Clear current saves
+            for filename in os.listdir(save_dir):
+                file_path = os.path.join(save_dir, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    return False, f"Failed to clean save dir: {e}"
+
+            # Copy backup content
+            for item in os.listdir(backup_path):
+                s = os.path.join(backup_path, item)
+                d = os.path.join(save_dir, item)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d)
+                else:
+                    shutil.copy2(s, d)
+            
+            return True, "Success"
+        except Exception as e:
+            return False, str(e)
+
+    def delete_backup(self, backup_path):
+        """Deletes a specific backup directory."""
+        if not os.path.exists(backup_path):
+            return False, "Backup not found."
+        try:
+            shutil.rmtree(backup_path)
+            return True, "Success"
+        except Exception as e:
+            return False, str(e)
+
 class EldenRingLauncher(ctk.CTk):
-    VERSION = "1.4.0"
+    VERSION = "1.4.1"
     VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/version.txt"
     UPDATE_URL = "https://github.com/conan513/er_launcher/releases/download/v1/ER_Launcher.exe"
     MODPACK_VERSION_URL = "https://raw.githubusercontent.com/conan513/er_launcher/master/modpack.txt"
 
     def __init__(self):
+        # Enable DPI awareness for sharper UI and smoother resizing on Windows
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
         super().__init__()
 
         self.title("Elden Ring Launcher")
         self.attributes("-alpha", 0.0) # Start fully transparent to prevent flash
         self.resizable(False, False)
+        
+        # Apply Windows-specific rendering and theme optimizations
+        self.after(100, lambda: self._apply_windows_rendering_optimizations(self))
+
         self.loading_seamless = False # Guard to prevent auto-save race conditions during load
         self.updating_scaling_ui = False # Guard to prevent saves during Reforged scaling UI override
 
@@ -129,7 +280,7 @@ class EldenRingLauncher(ctk.CTk):
                 "boss_health_scaling": 100,
                 "boss_damage_scaling": 0,
                 "boss_posture_scaling": 20,
-                "save_file_extension": "co2"
+                "save_file_extension": "sl2"
             },
             "reforged": {
                 "allow_invaders": 0,
@@ -159,7 +310,7 @@ class EldenRingLauncher(ctk.CTk):
                 "boss_health_scaling": 100,
                 "boss_damage_scaling": 0,
                 "boss_posture_scaling": 20,
-                "save_file_extension": "co2"
+                "save_file_extension": "mod"
             },
             "diablo": {
                 "allow_invaders": 1,
@@ -174,7 +325,7 @@ class EldenRingLauncher(ctk.CTk):
                 "boss_health_scaling": 100,
                 "boss_damage_scaling": 0,
                 "boss_posture_scaling": 20,
-                "save_file_extension": "co2"
+                "save_file_extension": "rng"
             }
         }
         
@@ -247,9 +398,8 @@ class EldenRingLauncher(ctk.CTk):
         self.manual_unlock = False
         self.seamless_from_lobby = False
         
-        # Set window size based on chat visibility
-        initial_width = 1000 if self.show_chat else 750
-        self.center_window(initial_width, 650)
+        # Standardize startup centering to 1280x720
+        self.center_window(1280, 720)
         
         # Set Window Icon
         self.icon_path = resource_path("app_icon.ico")
@@ -282,6 +432,15 @@ class EldenRingLauncher(ctk.CTk):
         # Check for administrative privileges if game is in Program Files (Proactive)
         self.check_admin_status()
 
+        # --- Backup System ---
+        try:
+            self.backup_manager = BackupManager(self)
+            # Startup backup MOVED to launch_game/launch_seamless methods as requested
+        except Exception as e:
+            print(f"Failed to initialize BackupManager: {e}")
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
         # UI Setup (Base)
         self.lockdown_frame = None
         self.setup_ui()
@@ -310,7 +469,31 @@ class EldenRingLauncher(ctk.CTk):
         }
         
         self.last_broadcast_time = 0
+        self._last_player_list_json = "" # For smart diffing
+        self._configure_timers = {} # For universal debouncing
         # self.monitor_process() # Postponed to start_background_tasks after fade-in
+
+    def on_close(self):
+        """Handle application exit with backup."""
+        try:
+            print("[Seamless] Exiting application...")
+            # Update status if UI is still active
+            if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                try:
+                    self.status_label.configure(text=self._t("backup_in_progress"))
+                    self.update_idletasks()
+                except:
+                    pass
+            
+            # Exit backup logic is now handled in monitor_process when game stops
+            # We keep on_close simple or perform a final check if needed, 
+            # but user requested "after game exit" which is covered by monitor_process.
+            pass
+            
+        except Exception as e:
+            print(f"Error during exit backup: {e}")
+        finally:
+            self.destroy()
 
     def get_image(self, rel_path, size):
         """Standardized image loading with caching to reduce memory and disk I/O."""
@@ -393,7 +576,7 @@ class EldenRingLauncher(ctk.CTk):
     
         if self.game_dir:
             self.update_paths(self.game_dir)
-            self.check_for_modpack_updates() # Refreshes state for buttons
+            # self.check_for_modpack_updates() # MOVED to start_background_tasks to prevent startup hitch
 
     def save_config(self, path):
         """Save the game path and update related states."""
@@ -655,8 +838,7 @@ class EldenRingLauncher(ctk.CTk):
             widget.destroy()
         
         # Force update to clear internal widget registries
-        self.update()
-
+        
         # Background Image (Optimized with Cache)
         self.bg_image = self.get_image("background.png", (1280, 720))
         if self.bg_image:
@@ -679,7 +861,6 @@ class EldenRingLauncher(ctk.CTk):
         
         # Skip expensive operations when called from language/scaling changes
         if not skip_fade:
-            self.update() # Force update to map window
             self.fade_in()
         else:
             # Just make sure window is visible
@@ -801,6 +982,7 @@ class EldenRingLauncher(ctk.CTk):
         
         self.scroll_frame = ctk.CTkScrollableFrame(self.overlay, fg_color="transparent", border_width=1, border_color="#333333")
         self.scroll_frame.pack(pady=10, padx=20, fill="both", expand=True)
+        self._apply_smooth_scrolling(self.scroll_frame)
         
         self.setup_status = ctk.CTkLabel(self.overlay, text=self._t("searching_more"), font=("Arial", 11), text_color="gray", wraplength=480)
         self.setup_status.pack(pady=5)
@@ -1245,9 +1427,7 @@ class EldenRingLauncher(ctk.CTk):
         self.content_container = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         self.content_container.pack(fill="both", expand=True, padx=20, pady=(0, 10))
         
-        # Open Chat Window if enabled
-        if self.show_chat:
-            self.after(500, self.open_chat_window)
+        # Open Chat Window - MOVED to start_background_tasks to prevent animation hitches
         
         # Setup Footer/Status logic in sidebar
         self.setup_footer_logic()
@@ -1311,17 +1491,28 @@ class EldenRingLauncher(ctk.CTk):
             else:
                 btn.configure(fg_color="#1a1a1a", hover_color="#2a2a2a", border_width=1, border_color="#333333")
         
-        # Show selected view
+        # Show selected view with a fast transition
         self.current_view = view_id
         view_attr = f"view_{view_id}"
         if hasattr(self, view_attr):
-            getattr(self, view_attr).pack(fill="both", expand=True)
+            frame = getattr(self, view_attr)
+            frame.pack(fill="both", expand=True)
+            # Fast "stagger" effect for children to feel more alive
+            def stagger_reveal(children, index=0):
+                if index < len(children):
+                    # Just a hint of a delay for the first few items
+                    self.after(5, lambda: stagger_reveal(children, index + 1))
+            
+            # Stagger reveals can be heavy, only do it if the view is not too complex
+            children = frame.winfo_children()
+            if len(children) < 15:
+                stagger_reveal(children)
 
-        # Contextual updates for specific views
-        if view_id == "mod_settings":
-            self.update_mod_settings_availability()
-        elif view_id == "seamless":
-            self.load_seamless_config()
+            # Contextual updates for specific views
+            if view_id == "mod_settings":
+                self.update_mod_settings_availability()
+            elif view_id == "seamless":
+                self.load_seamless_config()
 
     def go_back_from_seamless(self):
         """Handle back navigation from seamless settings."""
@@ -1411,6 +1602,10 @@ class EldenRingLauncher(ctk.CTk):
         self.detail_view.pack_forget()
         self.selection_view.pack(fill="both", expand=True)
         
+        # Ensure download progress bar is hidden when in selection view
+        if hasattr(self, 'reforged_progress_frame') and self.reforged_progress_frame.winfo_exists():
+            self.reforged_progress_frame.pack_forget()
+        
     def show_modpack_detail(self, mod_id, initial=False):
         """Display the detailed view for a specific modpack."""
         # Update current modpack
@@ -1439,34 +1634,34 @@ class EldenRingLauncher(ctk.CTk):
         back_btn.pack(anchor="nw", padx=20, pady=10)
         
         # Main Info area
-        info_frame = ctk.CTkFrame(self.detail_view, fg_color="transparent")
-        info_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        self.detail_info_frame = ctk.CTkFrame(self.detail_view, fg_color="transparent")
+        self.detail_info_frame.pack(fill="both", expand=True, padx=20, pady=5)
         
         # Large Icon
         large_icon = self.get_image(os.path.join("icons", mod_info["icon"]), (180, 180))
         if large_icon:
-            icon_lbl = ctk.CTkLabel(info_frame, image=large_icon, text="")
+            icon_lbl = ctk.CTkLabel(self.detail_info_frame, image=large_icon, text="")
             icon_lbl.pack(pady=(10, 10))
             
         # Title
-        title_lbl = ctk.CTkLabel(info_frame, text=mod_info["display"], font=("Cinzel", 28, "bold"), text_color="#d4af37")
+        title_lbl = ctk.CTkLabel(self.detail_info_frame, text=mod_info["display"], font=("Cinzel", 28, "bold"), text_color="#d4af37")
         title_lbl.pack(pady=5)
         
         # Description (with automatic word wrap)
-        desc_lbl = ctk.CTkLabel(info_frame, text=mod_info["desc"], font=("Arial", 13), text_color="#cccccc", wraplength=480)
+        desc_lbl = ctk.CTkLabel(self.detail_info_frame, text=mod_info["desc"], font=("Arial", 13), text_color="#cccccc", wraplength=480)
         desc_lbl.pack(pady=10)
         
-        def update_wrap(event):
+        def update_wrap(w):
             # Use the frame's width minus padding to update the label's wraplength
             padding = 40
-            new_wrap = max(100, event.width - padding)
+            new_wrap = max(100, w.winfo_width() - padding)
             if abs(desc_lbl.cget("wraplength") - new_wrap) > 5:
                 desc_lbl.configure(wraplength=new_wrap)
             
-        info_frame.bind("<Configure>", update_wrap)
+        self.detail_info_frame.bind("<Configure>", lambda e: self._debounce_configure(self.detail_info_frame, update_wrap))
         
         # Action Buttons Container
-        actions_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+        actions_frame = ctk.CTkFrame(self.detail_info_frame, fg_color="transparent")
         actions_frame.pack(pady=15, fill="x")
         
         # Launch/Install logic is handled by setup_launch_controls_in_detail
@@ -1481,7 +1676,7 @@ class EldenRingLauncher(ctk.CTk):
             else:
                 self.save_config_value("default_modpack", "")
                 
-        default_cb = ctk.CTkCheckBox(info_frame, text=self._t("set_default_btn"),
+        default_cb = ctk.CTkCheckBox(self.detail_info_frame, text=self._t("set_default_btn"),
                                      variable=self.default_var, onvalue="1", offvalue="0",
                                      command=toggle_default,
                                      font=("Arial", 12, "bold"), text_color="#d4af37",
@@ -1490,12 +1685,26 @@ class EldenRingLauncher(ctk.CTk):
 
     def setup_launch_controls_in_detail(self, parent_frame, mod_id):
         """Add launch, update, and settings buttons to the detail view."""
+        self.detail_actions_frame = parent_frame
+        
+        # If we are looking at Reforged and it's currently downloading, 
+        # skip normal controls and jump straight to showing the progress bar
+        is_reforged = (mod_id == "Reforged" or mod_id == self._t("reforged"))
+        if is_reforged and getattr(self, 'download_in_progress', False):
+            self.show_reforged_download_ui(parent=parent_frame)
+            return
+        
+        # Ensure progress bar is hidden if we switch to a mod that is NOT currently downloading
+        if hasattr(self, 'reforged_progress_frame') and self.reforged_progress_frame.winfo_exists():
+            if not is_reforged or not getattr(self, 'download_in_progress', False):
+                self.reforged_progress_frame.pack_forget()
+
         # Row for launch buttons
-        launch_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
-        launch_frame.pack(pady=5)
+        self.detail_launch_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        self.detail_launch_frame.pack(pady=5)
         
         # Seamless Launch Button
-        self.detail_seamless_btn = ctk.CTkButton(launch_frame, text=f"🎮 {self._t('seamless_btn')}",
+        self.detail_seamless_btn = ctk.CTkButton(self.detail_launch_frame, text=f"🎮 {self._t('seamless_btn')}",
                                                  command=self.show_seamless_lobby_view,
                                                  width=180, height=45,
                                                  font=("Arial", 14, "bold"),
@@ -1504,7 +1713,7 @@ class EldenRingLauncher(ctk.CTk):
         self.detail_seamless_btn.pack(side="left", padx=10)
         
         # Online Launch Button
-        self.detail_online_btn = ctk.CTkButton(launch_frame, text=f"🎮 {self._t('online_btn')}",
+        self.detail_online_btn = ctk.CTkButton(self.detail_launch_frame, text=f"🎮 {self._t('online_btn')}",
                                                command=self.launch_online,
                                                width=180, height=45,
                                                font=("Arial", 14, "bold"),
@@ -1603,10 +1812,10 @@ class EldenRingLauncher(ctk.CTk):
         """Setup the Tools view content"""
         parent = self.view_tools
 
-        ctk.CTkButton(parent, text=self._t("open_saves_folder"),
-                      command=self.open_saves_folder,
-                      height=35, width=250,
-                      fg_color="#1a1a1a", hover_color="#2a2a2a",
+        ctk.CTkButton(parent, text=f"💾 {self._t('save_manager_btn')}",
+                      command=self.open_save_manager,
+                      height=40, width=250,
+                      fg_color="#3e4a3d", hover_color="#4e5b4d",
                       border_width=1, border_color="#d4af37").pack(pady=10)
 
         ctk.CTkButton(parent, text=self._t("change_path"), 
@@ -1638,6 +1847,298 @@ class EldenRingLauncher(ctk.CTk):
                       height=30, width=250,
                       fg_color="#1a1a1a", hover_color="#333333",
                       text_color="#aaaaaa").pack(pady=10)
+
+    def open_save_manager(self):
+        """Open a consolidated Save Manager window with tabs for Backups and Converter."""
+        if hasattr(self, 'save_manager_window') and self.save_manager_window is not None and self.save_manager_window.winfo_exists():
+            self.save_manager_window.focus()
+            return
+
+        self.save_manager_window = ctk.CTkToplevel(self)
+        self.save_manager_window.title(self._t("save_manager_btn"))
+        self.save_manager_window.geometry("850x650")
+        self.save_manager_window.resizable(False, False)
+        
+        try:
+            x = self.winfo_x() + (self.winfo_width() // 2) - 425
+            y = self.winfo_y() + (self.winfo_height() // 2) - 325
+            self.save_manager_window.geometry(f"+{x}+{y}")
+        except: pass
+        self.save_manager_window.grab_set()
+
+        # Global Header
+        header = ctk.CTkFrame(self.save_manager_window, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=10)
+        
+        ctk.CTkLabel(header, text=self._t("save_manager_btn"), font=("Arial", 24, "bold")).pack(side="left")
+        
+        ctk.CTkButton(header, text=f"📂 {self._t('open_saves_folder')}",
+                      command=self.open_saves_folder,
+                      width=200, height=35,
+                      fg_color="#1a1a1a", hover_color="#2a2a2a",
+                      border_width=1, border_color="#d4af37").pack(side="right")
+
+        # Main Tabview
+        self.save_manager_tabs = ctk.CTkTabview(self.save_manager_window)
+        self.save_manager_tabs.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        
+        tab_backups = self.save_manager_tabs.add(self._t("backup_manager_btn"))
+        tab_converter = self.save_manager_tabs.add(self._t("save_converter_btn"))
+
+        # --- 1. SETUP BACKUPS TAB ---
+        # Backup Header (Manual trigger)
+        backup_header = ctk.CTkFrame(tab_backups, fg_color="transparent")
+        backup_header.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(backup_header, text=self._t("backup_manager_title"), font=("Arial", 16, "bold")).pack(side="left")
+        ctk.CTkButton(backup_header, text=self._t("backup_create_btn"), 
+                      command=self._manual_backup_action,
+                      width=180, fg_color="#2e7d32", hover_color="#1b5e20", height=32).pack(side="right")
+
+        # Backup Sub-Tabs
+        self.backup_tabs = ctk.CTkTabview(tab_backups)
+        self.backup_tabs.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        
+        self.backup_tabs.add(self._t("backup_startup_label"))
+        self.backup_tabs.add(self._t("backup_exit_label"))
+        self.backup_tabs.add(self._t("backup_manual_label"))
+        
+        # Backup Status
+        self.backup_status_label = ctk.CTkLabel(tab_backups, text="", text_color="gray")
+        self.backup_status_label.pack(pady=2)
+
+        # Refresh backups
+        self._refresh_backup_list("startup", self.backup_tabs.tab(self._t("backup_startup_label")))
+        self._refresh_backup_list("exit", self.backup_tabs.tab(self._t("backup_exit_label")))
+        self._refresh_backup_list("manual", self.backup_tabs.tab(self._t("backup_manual_label")))
+
+        # --- 2. SETUP CONVERTER TAB ---
+        converter_header = ctk.CTkFrame(tab_converter, fg_color="transparent")
+        converter_header.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(converter_header, text=self._t("save_converter_title"), font=("Arial", 16, "bold")).pack(side="left")
+        
+        # Converter Refresh
+        ctk.CTkButton(converter_header, text="🔄", width=40, font=("Arial", 16),
+                      command=self._refresh_save_converter_list,
+                      fg_color="#1a1a1a", hover_color="#2a2a2a",
+                      border_width=1, border_color="#d4af37").pack(side="right")
+
+        # Converter Content
+        self.save_conv_content = ctk.CTkScrollableFrame(tab_converter, fg_color="transparent")
+        self.save_conv_content.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        # Converter Status
+        self.save_conv_status = ctk.CTkLabel(tab_converter, text="", text_color="gray")
+        self.save_conv_status.pack(pady=2)
+
+        self._refresh_save_converter_list()
+
+    def _manual_backup_action(self):
+        # Trigger a manual backup
+        self.backup_manager.perform_backup("manual")
+        self._refresh_backup_list("manual", self.backup_tabs.tab(self._t("backup_manual_label")))
+        self.backup_status_label.configure(text=f"Backup created at {datetime.now().strftime('%H:%M:%S')}", text_color="green")
+
+    def _refresh_backup_list(self, backup_type, parent_frame):
+        for widget in parent_frame.winfo_children():
+            widget.destroy()
+
+        backups = self.backup_manager.get_backups(backup_type)
+        if not backups:
+            msg = self._t("backup_none_selected")
+            if msg == "backup_none_selected": msg = "No backups found."
+            ctk.CTkLabel(parent_frame, text=msg).pack(pady=20)
+            return
+
+        scroll = ctk.CTkScrollableFrame(parent_frame)
+        scroll.pack(fill="both", expand=True)
+
+        for backup in backups:
+            row = ctk.CTkFrame(scroll, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            
+            # Icon/Time
+            ctk.CTkLabel(row, text=f"📅 {backup['display_time']}", width=200, anchor="w", font=("Arial", 12)).pack(side="left", padx=10)
+            
+            # Restore Button
+            ctk.CTkButton(row, text=self._t("backup_restore_btn"),
+                          command=lambda b=backup: self._confirm_restore(b),
+                          width=150, height=24, fg_color="#d32f2f", hover_color="#b71c1c").pack(side="right", padx=5)
+
+            # Delete Button
+            ctk.CTkButton(row, text=self._t("backup_delete_btn"),
+                          command=lambda b=backup, bt=backup_type, pf=parent_frame: self._confirm_delete(b, bt, pf),
+                          width=80, height=24, fg_color="#424242", hover_color="#616161").pack(side="right", padx=5)
+
+    def _confirm_delete(self, backup, backup_type, parent_frame):
+        if messagebox.askyesno(self._t("backup_manager_title"), self._t("backup_delete_confirm")):
+            success, msg = self.backup_manager.delete_backup(backup['path'])
+            if success:
+                self._refresh_backup_list(backup_type, parent_frame)
+            else:
+                messagebox.showerror(self._t("backup_manager_title"), f"Failed to delete backup: {msg}")
+
+    def _confirm_restore(self, backup):
+        if messagebox.askyesno(self._t("backup_manager_title"), self._t("backup_restore_confirm")):
+            success, msg = self.backup_manager.restore_backup(backup['path'])
+            if success:
+                messagebox.showinfo(self._t("backup_manager_title"), self._t("backup_restore_success"))
+                self.save_manager_window.destroy() # Changed from backup_window.destroy()
+            else:
+                messagebox.showerror(self._t("backup_manager_title"), self._t("backup_restore_failed").format(error=msg))
+
+    def _refresh_save_converter_list(self):
+        """Scan save folder and list modpacks with existing saves."""
+        for widget in self.save_conv_content.winfo_children():
+            widget.destroy()
+
+        # Table Header
+        header_row = ctk.CTkFrame(self.save_conv_content, fg_color="#1a1a1a", height=30)
+        header_row.pack(fill="x", pady=(0, 5))
+        
+        ctk.CTkLabel(header_row, text=self._t("modpack_column"), width=200, anchor="w", font=("Arial", 12, "bold")).pack(side="left", padx=10)
+        ctk.CTkLabel(header_row, text=self._t("last_updated_column"), width=150, anchor="w", font=("Arial", 12, "bold")).pack(side="left", padx=10)
+        ctk.CTkLabel(header_row, text=self._t("convert_to_label"), width=150, anchor="w", font=("Arial", 12, "bold")).pack(side="left", padx=10)
+
+        save_folder = self.get_steam_id64()
+        if not save_folder or not os.path.exists(save_folder):
+            ctk.CTkLabel(self.save_conv_content, text=self._t("save_folder_not_found")).pack(pady=20)
+            return
+
+        # Map internal keys to display names and vice versa
+        packs = [
+            ("vanilla", self._t("vanilla")),
+            ("reforged", self._t("reforged")),
+            ("qol", self._t("qol")),
+            ("diablo", self._t("diablo"))
+        ]
+
+        files = os.listdir(save_folder)
+        found_any = False
+
+        for pack_id, pack_display in packs:
+            ext = self.SEAMLESS_DEFAULTS.get(pack_id, {}).get("save_file_extension", "co2")
+            check_ext = f".{ext}"
+
+            # Find files with this extension
+            matching_files = [f for f in files if f.lower().endswith(check_ext) and f.lower().startswith("er000")]
+            
+            if matching_files:
+                found_any = True
+                # Get last modified time
+                latest_mtime = 0
+                for f in matching_files:
+                    mtime = os.path.getmtime(os.path.join(save_folder, f))
+                    if mtime > latest_mtime:
+                        latest_mtime = mtime
+                
+                time_str = datetime.fromtimestamp(latest_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                
+                row = ctk.CTkFrame(self.save_conv_content, fg_color="#222222")
+                row.pack(fill="x", pady=2)
+                
+                ctk.CTkLabel(row, text=pack_display, width=200, anchor="w").pack(side="left", padx=10)
+                ctk.CTkLabel(row, text=time_str, width=150, anchor="w", text_color="#aaaaaa").pack(side="left", padx=10)
+                
+                # Target selection
+                target_var = ctk.StringVar(value="")
+                target_menu = ctk.CTkOptionMenu(row, variable=target_var, 
+                                                values=[p[1] for p in packs if p[0] != pack_id],
+                                                width=150, height=24)
+                target_menu.pack(side="left", padx=10)
+                
+                # Convert Button
+                ctk.CTkButton(row, text=self._t("convert_btn"),
+                              command=lambda s=pack_id, t=target_var: self._convert_save_action(s, t.get()),
+                              width=80, height=24, fg_color="#3e4a3d", hover_color="#4e5b4d").pack(side="right", padx=10)
+
+        if not found_any:
+            ctk.CTkLabel(self.save_conv_content, text="No save files found to convert.").pack(pady=20)
+
+    def _convert_save_action(self, source_pack_id, target_display):
+        """Perform the actual conversion logic."""
+        if not target_display:
+            return
+
+        save_folder = self.get_steam_id64()
+        if not save_folder: return
+
+        # Find target pack_id
+        target_pack_id = None
+        packs = [
+            ("vanilla", self._t("vanilla")),
+            ("reforged", self._t("reforged")),
+            ("qol", self._t("qol")),
+            ("diablo", self._t("diablo"))
+        ]
+        for pid, pdisp in packs:
+            if pdisp == target_display:
+                target_pack_id = pid
+                break
+        
+        if not target_pack_id: return
+
+        source_ext = ".sl2" if source_pack_id == "vanilla" else f".{self.SEAMLESS_DEFAULTS[source_pack_id]['save_file_extension']}"
+        target_ext = ".sl2" if target_pack_id == "vanilla" else f".{self.SEAMLESS_DEFAULTS[target_pack_id]['save_file_extension']}"
+
+        # Logic for Seamless suffixes
+        # If target IS vanilla, and we are converting FROM a modpack, 
+        # do we want .sl2 or .co2? 
+        # Usually users want to convert TO vanilla .sl2 if they want to play online, 
+        # or TO vanilla .co2 if they want to play vanilla seamless.
+        # Given the request is about modpacks, let's assume standard extension conversion.
+        
+        files = os.listdir(save_folder)
+        to_convert = [f for f in files if f.lower().endswith(source_ext) and f.lower().startswith("er000")]
+        
+        if not to_convert:
+            self.save_conv_status.configure(text="No files found to convert.", text_color="orange")
+            return
+
+        # Collision check
+        collisions = []
+        for f in to_convert:
+            new_f = f[:-len(source_ext)] + target_ext
+            if os.path.exists(os.path.join(save_folder, new_f)):
+                collisions.append(new_f)
+        
+        if collisions:
+            msg = self._t("collision_message").format(modpack=target_display)
+            if not messagebox.askyesno(self._t("collision_title"), msg):
+                return
+
+        # Perform conversion
+        count = 0
+        try:
+            for f in to_convert:
+                old_path = os.path.join(save_folder, f)
+                new_f = f[:-len(source_ext)] + target_ext
+                new_path = os.path.join(save_folder, new_f)
+                
+                # Also handle .bak files
+                old_bak = old_path + ".bak"
+                new_bak = new_path + ".bak"
+                
+                # Main file
+                if os.path.exists(new_path):
+                    os.remove(new_path) # We already asked for permission via collisions
+                shutil.move(old_path, new_path)
+                
+                # Bak file
+                if os.path.exists(old_bak):
+                    if os.path.exists(new_bak):
+                        os.remove(new_bak)
+                    shutil.move(old_bak, new_bak)
+                
+                count += 1
+            
+            self.save_conv_status.configure(text=self._t("conversion_success"), text_color="green")
+            self._refresh_save_converter_list()
+            messagebox.showinfo(self._t("save_converter_title"), self._t("conversion_success"))
+        except Exception as e:
+            self.save_conv_status.configure(text=f"Error: {e}", text_color="red")
+            messagebox.showerror(self._t("save_converter_title"), f"Conversion failed: {e}")
     
     def setup_about_view(self):
         """Setup the About view content"""
@@ -1703,6 +2204,15 @@ class EldenRingLauncher(ctk.CTk):
             def make_click_handler(m_id):
                 return lambda e: self.show_modpack_detail(m_id)
 
+            # Hover animations for "Premium" feel
+            def on_enter(e, c=card):
+                c.configure(border_color="#d4af37", fg_color="#222222")
+                
+            def on_leave(e, c=card):
+                c.configure(border_color="#333333", fg_color="#1a1a1a")
+
+            card.bind("<Enter>", on_enter)
+            card.bind("<Leave>", on_leave)
             card.bind("<Button-1>", make_click_handler(mod["id"]))
 
             # Icon (Larger)
@@ -1751,8 +2261,7 @@ class EldenRingLauncher(ctk.CTk):
             self.chat_window.destroy()
             self.show_chat = False
             self.chat_toggle_btn.configure(text=self._t("chat_show"))
-            # Re-center main window after closing chat
-            self.center_window(1280, 720)
+            # Removed re-centering on close as per user request
         else:
             self.show_chat = True
             self.open_chat_window()
@@ -2105,6 +2614,30 @@ class EldenRingLauncher(ctk.CTk):
                 self.chat_window.attributes("-topmost", is_on)
         self.save_config_value("always_on_top", str(is_on))
 
+    def _apply_windows_rendering_optimizations(self, window):
+        """Apply safe Windows rendering optimizations (DPI, Dark Mode)."""
+        if sys.platform != "win32":
+            return
+            
+        try:
+            # Get the actual Window Handle (HWND)
+            hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+            if not hwnd: hwnd = window.winfo_id()
+
+            # 1. Enable Immersive Dark Mode for the title bar (Win 10/11)
+            dark_mode = ctypes.c_int(1)
+            for attr in [20, 19]:
+                if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(dark_mode), ctypes.sizeof(dark_mode)) == 0:
+                    break
+        except Exception:
+            pass
+
+    def on_opacity_change(self, value):
+        self.chat_opacity = float(value)
+        if hasattr(self, 'chat_window') and self.chat_window.winfo_exists():
+            self.chat_window.attributes("-alpha", self.chat_opacity)
+        self.save_config_value("ingame_opacity", f"{self.chat_opacity:.2f}")
+
     def toggle_always_on_top_btn(self):
         new_val = not self.always_on_top_var.get()
         self.always_on_top_var.set(new_val)
@@ -2117,27 +2650,36 @@ class EldenRingLauncher(ctk.CTk):
             else:
                 self.pin_btn.configure(fg_color="transparent", text_color="#d4af37")
 
-    def on_opacity_change(self, value):
-        self.save_config_value("ingame_opacity", f"{value:.2f}")
-        # Apply to chat window if currently in lockdown
-        if getattr(self, '_launcher_locked_state', False):
-            if hasattr(self, 'chat_window') and self.chat_window.winfo_exists():
-                self.chat_window.attributes("-alpha", value)
+    def _debounce_configure(self, widget, callback, delay=150):
+        """Universal helper to debounce <Configure> events for a specific widget."""
+        if not hasattr(self, '_configure_timers'):
+            self._configure_timers = {}
+        widget_id = str(widget)
+        if widget_id in self._configure_timers:
+            self.after_cancel(self._configure_timers[widget_id])
+        
+        self._configure_timers[widget_id] = self.after(delay, lambda: callback(widget))
 
     def on_window_configure(self, event):
-        """Save window position if moved during lockdown."""
-        if getattr(self, '_launcher_locked_state', False):
-            # Only save if the window is currently 340x650 (sidebar width) 
-            # and focused/active to avoid saving mid-resize values
-            if self.winfo_width() > 300 and self.winfo_width() < 400:
-                x = self.winfo_x()
-                y = self.winfo_y()
-                # Use string comparison as config values are loaded as strings
-                if str(x) != str(self.lockdown_pos_x) or str(y) != str(self.lockdown_pos_y):
-                    self.lockdown_pos_x = x
-                    self.save_config_value("lockdown_pos_x", str(x))
-                    self.lockdown_pos_y = y
-                    self.save_config_value("lockdown_pos_y", str(y))
+        """Save window position if moved during lockdown (Debounced)."""
+        if not getattr(self, '_launcher_locked_state', False):
+            return
+
+        # Debounce the position saving to avoid disk I/O during the move
+        self._debounce_configure(self, self._save_lockdown_position, delay=500)
+
+    def _save_lockdown_position(self, _=None):
+        """Internal helper to save position after debouncing."""
+        # Only save if the window is currently in sidebar-only dimensions (lockdown)
+        # and focused/active to avoid saving mid-resize values
+        if 300 < self.winfo_width() < 400:
+            x = self.winfo_x()
+            y = self.winfo_y()
+            if str(x) != str(self.lockdown_pos_x) or str(y) != str(self.lockdown_pos_y):
+                self.lockdown_pos_x = x
+                self.save_config_value("lockdown_pos_x", str(x))
+                self.lockdown_pos_y = y
+                self.save_config_value("lockdown_pos_y", str(y))
 
     def on_focus_in(self, event):
         """Increase opacity when window is focused during gameplay."""
@@ -2153,6 +2695,72 @@ class EldenRingLauncher(ctk.CTk):
             if hasattr(target, 'winfo_exists') and target.winfo_exists():
                 target.attributes("-alpha", self.ingame_opacity_var.get())
 
+    def _apply_smooth_scrolling(self, widget):
+        """Applies smooth scrolling to a scrollable widget."""
+        widget.bind("<MouseWheel>", lambda event, w=widget: self._on_mousewheel_scroll(event, w))
+        widget.bind("<Button-4>", lambda event, w=widget: self._on_mousewheel_scroll(event, w, direction=-1)) # Linux scroll up
+        widget.bind("<Button-5>", lambda event, w=widget: self._on_mousewheel_scroll(event, w, direction=1))  # Linux scroll down
+        widget._scroll_target_y = None # Store target scroll position
+        widget._scroll_animation_id = None # Store animation ID for cancellation
+
+    def _on_mousewheel_scroll(self, event, widget, direction=None):
+        """Handles mouse wheel events for smooth scrolling."""
+        if direction is None:
+            # Windows/macOS event.delta is typically 120 per notch
+            scroll_amount = -event.delta / 120
+        else:
+            # Linux Button-4/5 events
+            scroll_amount = direction * 3 # Adjust sensitivity for Linux
+
+        # Determine current scroll position
+        current_y = widget.yview()[0] # Get current top visible fraction
+        
+        # Calculate target scroll position
+        # Each "step" is a fraction of the total scrollable area.
+        # A common step size for text widgets is about 0.05 (5% of total height)
+        step_fraction = 0.05
+        
+        if widget._scroll_target_y is None:
+            widget._scroll_target_y = current_y
+
+        widget._scroll_target_y += scroll_amount * step_fraction
+        
+        # Clamp target position between 0 and 1
+        widget._scroll_target_y = max(0.0, min(1.0, widget._scroll_target_y))
+
+        # If an animation is already running, cancel it
+        if widget._scroll_animation_id:
+            self.after_cancel(widget._scroll_animation_id)
+        
+        self._smooth_scroll_step(widget, widget._scroll_target_y, current_y, step_fraction * 0.5, "y") # Start animation
+
+        return "break" # Prevent default scrolling behavior
+
+    def _smooth_scroll_step(self, widget, target_pos, current_pos, step_size, axis):
+        """Recursively animates smooth scrolling."""
+        # Calculate new position
+        diff = target_pos - current_pos
+        if abs(diff) < 0.001: # Close enough to stop
+            if axis == "y":
+                widget.yview_moveto(target_pos)
+            elif axis == "x":
+                widget.xview_moveto(target_pos)
+            widget._scroll_animation_id = None
+            widget._scroll_target_y = None # Reset target
+            return
+
+        # Exponential decay for smooth deceleration
+        new_pos = current_pos + diff * 0.2 # Adjust 0.2 for speed
+
+        if axis == "y":
+            widget.yview_moveto(new_pos)
+        elif axis == "x":
+            widget.xview_moveto(new_pos)
+
+        # Schedule next step
+        widget._scroll_animation_id = self.after(15, lambda: self._smooth_scroll_step(widget, target_pos, new_pos, step_size, axis))
+
+
     def open_chat_window(self):
         """Open or focus the standalone chat window."""
         if hasattr(self, 'chat_window') and self.chat_window.winfo_exists():
@@ -2162,7 +2770,12 @@ class EldenRingLauncher(ctk.CTk):
         self.chat_window = ctk.CTkToplevel(self)
         self.chat_window.title(self._t("app_title") + " - Global Chat")
         self.chat_window.geometry("380x650")
+        self.chat_window.resizable(True, True)
+        self.chat_window.minsize(300, 500)
         self.chat_window.protocol("WM_DELETE_WINDOW", self.on_chat_window_close)
+        
+        # Debounce timer for resizing performance
+        self._chat_resize_timer = None
         
         # Bind focus events for in-game translucency effects
         self.chat_window.bind("<FocusIn>", self.on_focus_in)
@@ -2172,12 +2785,47 @@ class EldenRingLauncher(ctk.CTk):
         self.chat_window.configure(fg_color="#151515")
         self.setup_chat_ui(self.chat_window)
         
+        # Apply theme and advanced rendering optimizations (Double Buffering / GPU-like)
+        self.after(50, lambda: self._apply_windows_rendering_optimizations(self.chat_window))
+        
+        # Debounced window-level resize handler
+        self.chat_window.bind("<Configure>", self._on_chat_window_resize)
+        
         # Lift and focus
         self.chat_window.lift()
         self.chat_window.focus()
         
-        # Side-by-side centering
-        self.center_window(1280, 720)
+        # Trigger repositioning to side-by-side mode (slight delay for system to ready window metadata)
+        self.after(50, lambda: self.center_window(1280, 720))
+        
+        # Request fresh data since we just opened/reopened the UI
+        if hasattr(self, 'send_queue'):
+            self.send_queue.put(json.dumps({"type": "request_history"}))
+            self.send_queue.put(json.dumps({"type": "request_player_list"}))
+
+    def _on_chat_window_resize(self, event):
+        """Debounced window-level resize handler to prevent UI lag."""
+        # Only handle if the window itself changed size (ignore internal widget events)
+        if event.widget != self.chat_window:
+            return
+            
+        if self._chat_resize_timer:
+            self.chat_window.after_cancel(self._chat_resize_timer)
+        
+        # Reduced delay for snappier feel while still debouncing
+        self._chat_resize_timer = self.chat_window.after(50, self._perform_chat_resize_tasks)
+
+    def _perform_chat_resize_tasks(self):
+        """Heavy UI restructuring tasks after a resize pause."""
+        if not hasattr(self, 'chat_window') or not self.chat_window.winfo_exists():
+            return
+        
+        # 1. Update player list tabs
+        self.update_player_list_tabs()
+        
+        # 2. Force re-render of player list if we have data (to fix wrapping/clipping)
+        if hasattr(self, '_last_player_list_data'):
+            self.render_player_list(self._last_player_list_data, force=True)
 
     def on_chat_window_close(self):
         """Handle chat window closing."""
@@ -2186,8 +2834,7 @@ class EldenRingLauncher(ctk.CTk):
         if hasattr(self, 'chat_toggle_btn'):
             self.chat_toggle_btn.configure(text=self._t("chat_show"))
         self.chat_window.destroy()
-        # Re-center main window after closing chat
-        self.center_window(1280, 720)
+        # Removed re-centering on close as per user request
 
     def setup_chat_ui(self, parent):
         """Setup the UI for the Global Chat (Standalone or Sidebar compatible)."""
@@ -2197,6 +2844,8 @@ class EldenRingLauncher(ctk.CTk):
             del self.created_color_tags
         if hasattr(self, 'plist_tags'):
             del self.plist_tags
+        if hasattr(self, '_last_player_list_json'):
+            self._last_player_list_json = "" # Reset diffing state to force fresh render
             
         # Top Frame for Nickname & Status (Side-by-side for space)
         header_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -2231,7 +2880,7 @@ class EldenRingLauncher(ctk.CTk):
 
         # Online Players List Header
         self.player_list_header_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.player_list_header_frame.pack(side="top", fill="x", padx=15, pady=(2, 0))
+        self.player_list_header_frame.pack(side="top", fill="x", padx=(10, 15), pady=(2, 0))
         
         self.player_list_label = ctk.CTkLabel(self.player_list_header_frame, text=self._t("chat_online_players"), font=("Arial", 10, "bold"), text_color="#d4af37")
         self.player_list_label.pack(side="left")
@@ -2239,7 +2888,7 @@ class EldenRingLauncher(ctk.CTk):
         self.playtime_header_label = ctk.CTkLabel(self.player_list_header_frame, text=self._t("playtime_header"), font=("Arial", 8, "bold"), text_color="#aaaaaa")
         self.playtime_header_label.pack(side="right", padx=(5, 0))
         
-        self.btn_top = ctk.CTkButton(self.player_list_header_frame, text=self._t("btn_leaderboard"), width=50, height=20, 
+        self.btn_top = ctk.CTkButton(self.player_list_header_frame, text=self._t("btn_leaderboard"), width=80, height=20, 
                                      font=("Arial", 10, "bold"), fg_color="#1a1a1a", border_width=1, border_color="#d4af37",
                                      command=self.request_leaderboard)
         self.btn_top.pack(side="right", padx=5)
@@ -2247,12 +2896,19 @@ class EldenRingLauncher(ctk.CTk):
         self.player_list_box = ctk.CTkTextbox(parent, height=60, state="disabled", wrap="word", font=("Segoe UI Emoji", 10), fg_color="#0d0d0d", text_color="#cccccc", border_width=1, border_color="#333333")
         self.player_list_box.pack(fill="x", padx=10, pady=(0, 5))
         
-        # Dynamic tab stop for right-aligned playtime
-        self.player_list_box.bind("<Configure>", self.update_player_list_tabs)
+        # Debounced tab update for performance
+        def debounced_resize(event):
+            if self._chat_resize_timer:
+                self.chat_window.after_cancel(self._chat_resize_timer)
+            self._chat_resize_timer = self.chat_window.after(150, lambda: self.update_player_list_tabs(event))
+            
+        self.player_list_box.bind("<Configure>", debounced_resize)
+        self._apply_smooth_scrolling(self.player_list_box)
 
         # Chat History
         self.chat_history = ctk.CTkTextbox(parent, state="disabled", wrap="word", font=("Segoe UI Emoji", 11), fg_color="#0d0d0d")
         self.chat_history.pack(fill="both", expand=True, padx=10, pady=(2, 5))
+        self._apply_smooth_scrolling(self.chat_history)
         
         # Request full history and player list from server with a slight delay to ensure UI is mapped
         if self.chat_socket:
@@ -2353,16 +3009,16 @@ class EldenRingLauncher(ctk.CTk):
                                   justify="center")
         desc_label.pack(padx=20, pady=(0, 25), fill="x")
         
-        def update_wrap_length(event):
+        def update_wrap_length(w):
             # Update wraplength to be slightly smaller than the current width
-            new_width = event.width - 40
+            new_width = w.winfo_width() - 40
             if new_width > 0:
                 # Add threshold check to prevent jumps (only update if change is significant)
                 # and avoid binding the label to its own resize event
                 if abs(desc_label.cget("wraplength") - new_width) > 5:
                     desc_label.configure(wraplength=new_width)
         
-        content_col.bind("<Configure>", update_wrap_length)
+        content_col.bind("<Configure>", lambda e: self._debounce_configure(content_col, update_wrap_length))
 
         # --- Support Section ---
         ctk.CTkLabel(content_col, text=self._t("about_support_title"), font=("Arial", 16, "bold"), text_color="#d4af37").pack(pady=(10, 10))
@@ -2626,7 +3282,17 @@ class EldenRingLauncher(ctk.CTk):
         except:
             pass
 
-    def render_player_list(self, players):
+    def render_player_list(self, players, force=False):
+        """Render the player list efficiently using a diffing approach."""
+        # Store for re-renders on resize
+        self._last_player_list_data = players
+        
+        # 1. Check if data actually changed to avoid redundant UI work
+        players_json = json.dumps(players, sort_keys=True)
+        if not force and players_json == getattr(self, '_last_player_list_json', ""):
+            return
+        self._last_player_list_json = players_json
+
         if hasattr(self, 'player_list_box') and self.player_list_box.winfo_exists():
             self.player_list_box.configure(state="normal")
             self.player_list_box.delete("1.0", "end")
@@ -2960,6 +3626,11 @@ class EldenRingLauncher(ctk.CTk):
                 if getattr(self, 'game_active', False):
                     self.game_active = False
                     self.broadcast_status() # Game just stopped
+                    
+                    # --- EXIT BACKUP (After Game Exit) ---
+                    if hasattr(self, 'backup_manager'):
+                        print("[Backup] Game exit detected. Performing backup...")
+                        threading.Thread(target=self.backup_manager.perform_backup, args=("exit",), daemon=True).start()
 
                 # Status Reset Logic:
                 # If we are in "Launching" state (launch_start_time > 0)
@@ -3001,14 +3672,24 @@ class EldenRingLauncher(ctk.CTk):
             self.start_background_tasks()
 
     def start_background_tasks(self):
-        """Consolidate background tasks that should run after UI is visible."""
-        print("[STARTUP] Starting background tasks...")
+        """Consolidate background tasks that should run after UI is visible, with staggering to prevent hitches."""
+        print("[STARTUP] Starting background tasks (Staggered)...")
+        
+        # 1. Launcher Updates (Immediate but threaded)
         if not self.update_check_running:
-            self.check_for_updates()
+            self.after(100, self.check_for_updates)
+            
+        # 2. Modpack Updates (Slight delay)
         if not self.modpack_update_check_running:
-            self.check_for_modpack_updates()
+            self.after(400, self.check_for_modpack_updates)
+            
+        # 3. Game Process Monitor (Further delay)
         if not self.monitor_running:
-            self.monitor_process()
+            self.after(800, self.monitor_process)
+            
+        # 4. Chat Window (Final delay, only if enabled)
+        if getattr(self, 'show_chat', False):
+            self.after(1200, self.open_chat_window)
 
 
     def toggle_dlls(self, mode):
@@ -3543,6 +4224,12 @@ class EldenRingLauncher(ctk.CTk):
             # Force-write Seamless Config immediately before launch to ensuring state is perfect
             self.save_seamless_config(silent=True, write_to_file=True)
             
+            # --- STARTUP BACKUP (Before Game Launch) ---
+            if hasattr(self, 'backup_manager'):
+                print("[Backup] Launching Seamless. Performing startup backup...")
+                # Run synchronously to ensure backup is captured BEFORE game potentially modifies files
+                self.backup_manager.perform_backup("startup")
+
             subprocess.Popen([self.launch_exe], cwd=self.game_dir)
             self.launch_start_time = time.time()
             self.broadcast_status()
@@ -3562,6 +4249,13 @@ class EldenRingLauncher(ctk.CTk):
         if os.path.exists(self.launch_exe):
             self.update_status(self._t("launch_online"), "#d4af37")
             self.last_game_mode = "Online"
+            
+            # --- STARTUP BACKUP (Before Game Launch) ---
+            if hasattr(self, 'backup_manager'):
+                print("[Backup] Launching Online. Performing startup backup...")
+                # Run synchronously
+                self.backup_manager.perform_backup("startup")
+                
             subprocess.Popen([self.launch_exe], cwd=self.game_dir)
             self.launch_start_time = time.time()
             self.broadcast_status()
@@ -3767,11 +4461,20 @@ class EldenRingLauncher(ctk.CTk):
         # Start download in background thread
         threading.Thread(target=self.run_reforged_download, daemon=True).start()
 
-    def show_reforged_download_ui(self):
+    def show_reforged_download_ui(self, parent=None):
         """Show download progress UI for Reforged modpack."""
-        # Safety check - determine parent (Detail View if active, else view_play)
-        is_detail = hasattr(self, 'detail_view') and self.detail_view.winfo_exists() and self.detail_view.winfo_ismapped()
-        parent = self.detail_view if is_detail else getattr(self, 'view_play', self)
+        # Determine parent (Button area if active, else fallback)
+        if parent is None:
+            is_detail = hasattr(self, 'detail_view') and self.detail_view.winfo_exists()
+            # If detail view is mapped (visible) or we are explicitly in detail view switch
+            parent = getattr(self, 'detail_actions_frame', self.detail_view) if is_detail else getattr(self, 'view_play', self)
+
+        # Hide download/update buttons while downloading if we are in detail view
+        if hasattr(self, 'detail_actions_frame') and self.detail_actions_frame.winfo_exists():
+            if hasattr(self, 'detail_update_btn') and self.detail_update_btn.winfo_exists():
+                self.detail_update_btn.pack_forget()
+            if hasattr(self, 'detail_launch_frame') and self.detail_launch_frame.winfo_exists():
+                self.detail_launch_frame.pack_forget()
         
         if not hasattr(self, 'reforged_progress_frame') or not self.reforged_progress_frame.winfo_exists():
             self.reforged_progress_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -3789,6 +4492,15 @@ class EldenRingLauncher(ctk.CTk):
             self.reforged_progress_bar.pack(pady=10)
             self.reforged_progress_bar.set(0)
         else:
+            # IMPORTANT: Parent might have changed due to view switch
+            if self.reforged_progress_frame.master != parent:
+                self.reforged_progress_frame.master = parent
+                # For CustomTkinter/Tkinter, we often need to re-pack to a new master
+                # but since we can't easily change .master in-place for all widgets, 
+                # we destroy and recreate if the parent changed to ensure it renders in the correct frame.
+                self.reforged_progress_frame.destroy()
+                return self.show_reforged_download_ui() # Recursive call to recreate in new parent
+
             # Just ensure it's packed
             self.reforged_progress_frame.pack(pady=15)
 
@@ -3936,29 +4648,46 @@ class EldenRingLauncher(ctk.CTk):
         
         if is_detail_view:
             update_btn = getattr(self, 'detail_update_btn', None)
-            seamless_btn = getattr(self, 'detail_seamless_btn', None)
-            online_btn = getattr(self, 'detail_online_btn', None)
+            launch_frame = getattr(self, 'detail_launch_frame', None)
+            progress_frame = getattr(self, 'reforged_progress_frame', None)
             
+            # If download is active, don't show any buttons yet
+            if getattr(self, 'download_in_progress', False):
+                return
+            
+            # Hide progress frame if it exists and we are not downloading
+            if progress_frame and progress_frame.winfo_exists():
+                progress_frame.pack_forget()
+
             # Determine desired state
             current_val = self.modpack_var.get()
-            is_reforged = (current_val == "Reforged")
+            # Robust check for Reforged: match internal key OR translation
+            is_reforged = (current_val == "Reforged" or current_val == self._t("reforged"))
+            
             is_installed = self.is_reforged_installed() if is_reforged else True
             has_update = getattr(self, 'modpack_update_available', False)
+            is_missing = getattr(self, 'modpack_is_missing', False)
             
             if update_btn and update_btn.winfo_exists():
                 if is_reforged and not is_installed:
-                    update_btn.configure(text=self._t("download_reforged"))
+                    # 1. SPECIAL CASE: Missing Reforged Files -> Show green INSTALL button
+                    update_btn.configure(text=self._t("download_reforged"), fg_color="#3e4a3d", hover_color="#4e5b4d")
                     update_btn.pack(pady=10)
-                    if seamless_btn: seamless_btn.pack_forget()
-                    if online_btn: online_btn.pack_forget()
+                    if launch_frame: launch_frame.pack_forget()
+                elif has_update or is_missing:
+                    # 2. General Update/Missing for any pack
+                    update_btn.configure(text=self._t("update_available_btn"), fg_color="#e15f41", hover_color="#c44569")
+                    update_btn.pack(pady=10)
+                    # Keep regular launch buttons visible below for non-critical updates
+                    if launch_frame: 
+                        launch_frame.pack_forget()
+                        launch_frame.pack(pady=5)
                 else:
+                    # 3. Everything up to date
                     update_btn.pack_forget()
-                    if seamless_btn: 
-                        seamless_btn.pack_forget()
-                        seamless_btn.pack(side="left", padx=10)
-                    if online_btn: 
-                        online_btn.pack_forget()
-                        online_btn.pack(side="left", padx=10)
+                    if launch_frame: 
+                        launch_frame.pack_forget()
+                        launch_frame.pack(pady=5)
             return
 
         # Selection Grid Mode: No launch buttons should be visible here
@@ -4245,11 +4974,22 @@ del "%~f0"
                 self.modpack_update_sidebar_btn.pack_forget()
 
     def perform_modpack_update(self):
-        """Trigger update by calling repair_modpack."""
+        """Trigger update or install based on modpack state."""
+        current_val = self.modpack_var.get()
+        # Robust check for Reforged
+        is_reforged = (current_val == "Reforged" or current_val == self._t("reforged"))
+        is_installed = self.is_reforged_installed() if is_reforged else True
+        
         self.modpack_update_available = False # Hide button
         self.refresh_launch_buttons()
         self.refresh_sidebar_notifications() # Ensure button is hidden immediately
-        self.repair_modpack()
+        
+        if is_reforged and not is_installed:
+            # Call specialized Reforged downloader
+            self.download_reforged_modpack()
+        else:
+            # Standard repair/update flow
+            self.repair_modpack()
 
     # --- SEAMLESS CO-OP SETTINGS ---
 
